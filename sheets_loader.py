@@ -7,6 +7,14 @@ import pandas as pd
 import gspread
 from googleapiclient.discovery import build
 from config_utils import get_credentials, get_sheet_range, get_folder_id, get_explicit_sheet_ids
+from app.config import (
+    get_google_service_account_credentials,
+    get_google_apis_services,
+    get_sheets_folder_id,
+    get_sheets_ids,
+    get_sheet_range,
+)
+
 
 
 class SheetsLoader:

@@ -9,9 +9,11 @@ from dotenv import load_dotenv
 from abacus_client import AbacusClient
 from sheets_loader import SheetsLoader
 from app.config import (
-    get_abacus_api_key,
-    get_model_name,
-    get_service_account_email,
+    get_google_service_account_credentials,
+    get_google_apis_services,
+    get_sheets_folder_id,
+    get_sheets_ids,
+    get_sheet_range,
 )
 from ui_styles import render_css
 import json
