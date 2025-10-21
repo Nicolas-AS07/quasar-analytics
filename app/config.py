@@ -50,6 +50,34 @@ def _secrets_get(path: Tuple[str, ...]) -> Optional[Any]:
         return None
 
 
+def _clean_json_string(json_str: str) -> str:
+    """Limpa e corrige problemas comuns em strings JSON."""
+    cleaned = json_str.strip()
+    
+    # Remove aspas externas se existirem
+    if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        cleaned = cleaned[1:-1]
+    
+    # Corrige escape sequences comuns do Streamlit Cloud
+    fixes = [
+        # Quebras de linha
+        ('\\\\n', '\\n'),  # \\n -> \n
+        ('\\\n', '\\n'),   # \<newline> -> \n
+        
+        # Aspas
+        ('\\"', '"'),      # \" -> "
+        ("\\'", "'"),      # \' -> '
+        
+        # Barras
+        ('\\\\', '\\'),    # \\ -> \
+    ]
+    
+    for old, new in fixes:
+        cleaned = cleaned.replace(old, new)
+    
+    return cleaned
+
+
 def _get_credentials_json() -> Optional[str]:
     """Função específica para obter o JSON das credenciais com diferentes tentativas."""
     # Tenta diferentes formatos comuns no Streamlit Cloud
@@ -72,27 +100,26 @@ def _get_credentials_json() -> Optional[str]:
                 
         # Se é string, limpa e valida
         if isinstance(val, str):
-            cleaned = val.strip().strip('"').strip("'")
-            if cleaned and (cleaned.startswith('{') or cleaned.startswith('"{')):
-                # Remove aspas extras se JSON estiver entre aspas
-                if cleaned.startswith('"') and cleaned.endswith('"'):
-                    cleaned = cleaned[1:-1]
-                # Decodifica escape sequences se necessário
+            cleaned = _clean_json_string(val)
+            
+            # Se não começa com {, não é JSON válido
+            if not cleaned.startswith('{'):
+                continue
+                
+            # Debug apenas se Streamlit disponível
+            if _HAS_STREAMLIT:
                 try:
-                    if '\\n' in cleaned or '\\' in cleaned:
-                        cleaned = cleaned.encode().decode('unicode_escape')
+                    import streamlit as st
+                    st.write(f"🔍 Tentando {source}: {len(cleaned)} chars")
+                    # Mostra uma amostra segura (sem a private key)
+                    sample = cleaned[:200] + "..." if len(cleaned) > 200 else cleaned
+                    if '"private_key"' in sample:
+                        sample = sample.split('"private_key"')[0] + '"private_key":"[HIDDEN]"...'
+                    st.code(sample, language='json')
                 except:
                     pass
-                    
-                # Debug apenas se Streamlit disponível
-                if _HAS_STREAMLIT:
-                    try:
-                        import streamlit as st
-                        st.write(f"🔍 Tentando {source}: {len(cleaned)} chars")
-                    except:
-                        pass
-                
-                return cleaned
+            
+            return cleaned
                 
     return None
 
@@ -201,11 +228,44 @@ def get_google_service_account_credentials():
                     print(f"DEBUG: {error_msg}")
                     
     except json.JSONDecodeError as e:
-        error_msg = f"Erro ao fazer parse do JSON em GOOGLE_SERVICE_ACCOUNT_CREDENTIALS: {e}"
+        error_msg = f"Erro ao fazer parse do JSON: {e}"
+        
+        # Tenta identificar o problema específico
+        if "Invalid control character" in str(e):
+            error_msg += "\n\n🔧 SOLUÇÃO: O JSON contém caracteres de controle inválidos (provavelmente quebras de linha mal escapadas)."
+            error_msg += "\n\nPara corrigir:"
+            error_msg += "\n1. Use JSON em linha única (sem quebras de linha)"
+            error_msg += "\n2. OU escape as quebras de linha como \\\\n"
+            error_msg += "\n3. OU use o bloco [google_service_account] no TOML"
+            
+        # Mostra o contexto do erro se possível
+        if hasattr(e, 'pos') and js:
+            start = max(0, e.pos - 50)
+            end = min(len(js), e.pos + 50)
+            context = js[start:end]
+            error_msg += f"\n\nContexto do erro (posição {e.pos}):\n...{context}..."
+            
         if _HAS_STREAMLIT:
             try:
                 import streamlit as st
-                st.error(f"❌ JSON Error: {error_msg}")
+                st.error(f"❌ {error_msg}")
+                
+                # Oferece solução alternativa
+                st.info("💡 **Solução alternativa**: Configure usando o bloco [google_service_account] nos secrets:")
+                st.code("""[google_service_account]
+type = "service_account"
+project_id = "seu-projeto-id"
+private_key_id = "sua-private-key-id"
+private_key = '''-----BEGIN PRIVATE KEY-----
+SUA_CHAVE_PRIVADA_AQUI
+-----END PRIVATE KEY-----'''
+client_email = "seu-service-account@projeto.iam.gserviceaccount.com"
+client_id = "seu-client-id"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
+universe_domain = "googleapis.com\"""", language='toml')
             except:
                 print(f"DEBUG: {error_msg}")
         else:

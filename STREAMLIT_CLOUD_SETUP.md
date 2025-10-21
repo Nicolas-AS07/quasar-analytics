@@ -47,7 +47,36 @@ client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/seu-se
 universe_domain = "googleapis.com"
 ```
 
+## � ERRO: "Invalid control character"
+
+Se você receber este erro:
+```
+❌ JSON Error: Invalid control character at: line 1 column 158 (char 157)
+```
+
+**CAUSA**: Quebras de linha na `private_key` não estão escapadas corretamente.
+
+**SOLUÇÃO RÁPIDA**: Use a **Solução 2** (bloco TOML) em vez de JSON string:
+
+```toml
+[google_service_account]
+type = "service_account"  
+project_id = "SEU_PROJECT_ID"
+private_key = '''-----BEGIN PRIVATE KEY-----
+SUA_CHAVE_PRIVADA_AQUI_SEM_\n
+-----END PRIVATE KEY-----'''
+client_email = "seu-service-account@projeto.iam.gserviceaccount.com"
+# ... resto das configurações
+```
+
+**NOTA**: Use aspas triplas simples (`'''`) para a private_key no TOML!
+
 ## 🔧 Como converter JSON para linha única
+
+1. Pegue seu arquivo `service_account.json`
+2. Use um minificador JSON online (ex: jsonformatter.org/json-minify)
+3. Escape as aspas duplas (\" no lugar de ")
+4. Cole no campo `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`
 
 1. Pegue seu arquivo `service_account.json`
 2. Use um minificador JSON online (ex: jsonformatter.org/json-minify)
