@@ -52,19 +52,59 @@ class SheetsLoader:
     def _auth(self) -> None:
         """Autentica via app.config e cria clientes Drive/Sheets."""
         try:
+            import streamlit as st
+            if hasattr(st, 'write'):
+                st.write("🔐 Iniciando autenticação...")
+        except:
+            print("DEBUG: Iniciando autenticação...")
+            
+        try:
             creds = get_google_service_account_credentials()
             self._auth_source = "app.config:get_google_service_account_credentials"
+            
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.success("✅ Credenciais obtidas com sucesso!")
+            except:
+                print("DEBUG: Credenciais obtidas com sucesso!")
         except Exception as e:
             self._last_errors.append(f"Credentials error: {e}")
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.error(f"❌ Erro ao obter credenciais: {e}")
+            except:
+                print(f"DEBUG: Erro ao obter credenciais: {e}")
             raise
 
         try:
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.write("🔧 Criando clientes Google API...")
+            except:
+                print("DEBUG: Criando clientes Google API...")
+                
             self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
             self._sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+            
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.success("✅ Clientes Google API criados com sucesso!")
+            except:
+                print("DEBUG: Clientes Google API criados com sucesso!")
         except Exception as e:
             self._drive = None
             self._sheets = None
             self._last_errors.append(f"Google API clients init failed: {e}")
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.error(f"❌ Erro ao criar clientes Google API: {e}")
+            except:
+                print(f"DEBUG: Erro ao criar clientes Google API: {e}")
             raise
 
     def _ensure_clients(self) -> None:
@@ -218,16 +258,50 @@ class SheetsLoader:
     # -------------------- Status / Diagnóstico --------------------
 
     def _has_any_credentials(self) -> bool:
+        """Verifica se há credenciais válidas disponíveis com logs de debug."""
         try:
-            _ = get_google_service_account_credentials()
+            # Tentar obter credenciais
+            creds = get_google_service_account_credentials()
+            
+            # Se chegou aqui, as credenciais existem
+            # Adiciona log via Streamlit se disponível
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.write("🔑 Credenciais encontradas e validadas!")
+            except:
+                print("DEBUG: Credenciais encontradas e validadas!")
+                
             return True
-        except Exception:
+        except Exception as e:
+            # Log do erro
+            try:
+                import streamlit as st
+                if hasattr(st, 'write'):
+                    st.error(f"❌ Erro ao obter credenciais: {e}")
+            except:
+                print(f"DEBUG: Erro ao obter credenciais: {e}")
             return False
 
     def is_configured(self) -> bool:
-        return self._has_any_credentials() and (
-            bool(self.sheet_folder_id) or bool(self.sheet_ids)
-        )
+        """Verifica se o loader está configurado com logs de debug."""
+        has_creds = self._has_any_credentials()
+        has_folder = bool(self.sheet_folder_id)
+        has_ids = bool(self.sheet_ids)
+        
+        # Log de debug
+        try:
+            import streamlit as st
+            if hasattr(st, 'write'):
+                st.write(f"🔍 **Verificação de configuração:**")
+                st.write(f"   - Credenciais: {'✅' if has_creds else '❌'}")
+                st.write(f"   - Folder ID: {'✅' if has_folder else '❌'} ({self.sheet_folder_id or 'não definido'})")
+                st.write(f"   - Sheet IDs: {'✅' if has_ids else '❌'} ({len(self.sheet_ids)} IDs)")
+                st.write(f"   - **Configurado: {'✅ SIM' if (has_creds and (has_folder or has_ids)) else '❌ NÃO'}**")
+        except:
+            print(f"DEBUG: Creds={has_creds}, Folder={has_folder}, IDs={has_ids}")
+            
+        return has_creds and (has_folder or has_ids)
 
     def status(self) -> Dict[str, Any]:
         try:
