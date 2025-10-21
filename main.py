@@ -32,9 +32,45 @@ render_css("dark")
 # ============================================
 
 def get_env_config():
-    """Obtém configurações do arquivo .env."""
-    api_key = os.getenv("ABACUS_API_KEY", "")
-    model = os.getenv("MODEL_NAME", "gemini-2.5-pro")
+    """Obtém configurações priorizando Streamlit Cloud (secrets) e depois env.
+
+    Busca por:
+    - ABACUS_API_KEY (raiz dos secrets ou em [abacus])
+    - MODEL_NAME (raiz ou em [abacus], fallback gemini-2.5-pro)
+    """
+    api_key = ""
+    model = "gemini-2.5-pro"
+    # 1) Secrets (Cloud-first)
+    try:
+        sec = getattr(st, "secrets", None)
+        if sec is not None:
+            if "ABACUS_API_KEY" in sec and str(sec["ABACUS_API_KEY"]).strip():
+                api_key = str(sec["ABACUS_API_KEY"]).strip()
+            elif "abacus" in sec:
+                ab = sec["abacus"]
+                if isinstance(ab, dict):
+                    if "ABACUS_API_KEY" in ab and str(ab["ABACUS_API_KEY"]).strip():
+                        api_key = str(ab["ABACUS_API_KEY"]).strip()
+                    elif "API_KEY" in ab and str(ab["API_KEY"]).strip():
+                        api_key = str(ab["API_KEY"]).strip()
+            # model
+            if "MODEL_NAME" in sec and str(sec["MODEL_NAME"]).strip():
+                model = str(sec["MODEL_NAME"]).strip()
+            elif "abacus" in sec:
+                ab = sec["abacus"]
+                if isinstance(ab, dict):
+                    if "MODEL_NAME" in ab and str(ab["MODEL_NAME"]).strip():
+                        model = str(ab["MODEL_NAME"]).strip()
+                    elif "model" in ab and str(ab["model"]).strip():
+                        model = str(ab["model"]).strip()
+    except Exception:
+        pass
+    # 2) Variáveis de ambiente (fallback)
+    if not api_key:
+        api_key = os.getenv("ABACUS_API_KEY", "").strip()
+    env_model = os.getenv("MODEL_NAME", "").strip()
+    if env_model:
+        model = env_model
     return api_key, model
 
 
@@ -203,6 +239,7 @@ def main():
                     "SHEETS_FOLDER_ID": False,
                     "SHEETS_IDS": False,
                     "SHEET_RANGE": False,
+                    "ABACUS_API_KEY": False,
                     "GOOGLE_APPLICATION_CREDENTIALS (file exists)": False,
                 }
                 # secrets
@@ -217,12 +254,33 @@ def main():
                                 keys["google_service_account"] = True
                             if "gcp_service_account" in sec:
                                 keys["gcp_service_account"] = True
+                            # raiz
                             if "SHEETS_FOLDER_ID" in sec and str(sec["SHEETS_FOLDER_ID"]).strip():
                                 keys["SHEETS_FOLDER_ID"] = True
                             if "SHEETS_IDS" in sec and str(sec["SHEETS_IDS"]).strip():
                                 keys["SHEETS_IDS"] = True
                             if "SHEET_RANGE" in sec and str(sec["SHEET_RANGE"]).strip():
                                 keys["SHEET_RANGE"] = True
+                            if "ABACUS_API_KEY" in sec and str(sec["ABACUS_API_KEY"]).strip():
+                                keys["ABACUS_API_KEY"] = True
+                            # seções alternativas
+                            def _check_section(section_name: str):
+                                try:
+                                    s = sec.get(section_name)  # type: ignore[attr-defined]
+                                except Exception:
+                                    s = None
+                                if isinstance(s, dict):
+                                    if str(s.get("SHEETS_FOLDER_ID", "")).strip():
+                                        keys["SHEETS_FOLDER_ID"] = True
+                                    if s.get("SHEETS_IDS") is not None and str(s.get("SHEETS_IDS", "")).strip():
+                                        keys["SHEETS_IDS"] = True
+                                    if str(s.get("SHEET_RANGE", "")).strip():
+                                        keys["SHEET_RANGE"] = True
+                                    if str(s.get("ABACUS_API_KEY", "") or s.get("API_KEY", "")).strip():
+                                        keys["ABACUS_API_KEY"] = True
+                                return
+                            for sect in ("sheets", "google_sheets", "google_service_account", "abacus"):
+                                _check_section(sect)
                         except Exception:
                             pass
                 except Exception:
@@ -237,6 +295,8 @@ def main():
                     keys["SHEETS_IDS"] = True
                 if str(env.get("SHEET_RANGE", "")).strip():
                     keys["SHEET_RANGE"] = True
+                if str(env.get("ABACUS_API_KEY", "")).strip():
+                    keys["ABACUS_API_KEY"] = True
                 creds_path = str(env.get("GOOGLE_APPLICATION_CREDENTIALS", "")).strip().strip("\"'")
                 if creds_path and os.path.isfile(creds_path):
                     keys["GOOGLE_APPLICATION_CREDENTIALS (file exists)"] = True

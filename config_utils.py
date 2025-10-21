@@ -31,17 +31,14 @@ def _get_secret(key: str):
 
 
 def get_credentials() -> Credentials:
-    """Cria o objeto Credentials priorizando:
-    1) Arquivo local (GOOGLE_APPLICATION_CREDENTIALS)
-    2) Secrets do Streamlit (google_service_account | GOOGLE_SERVICE_ACCOUNT_JSON | gcp_service_account)
-    3) JSON em variável de ambiente (GOOGLE_SERVICE_ACCOUNT_JSON)
-    """
-    # 1) Arquivo local
-    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip().strip("\"'")
-    if cred_path and os.path.exists(cred_path):
-        return Credentials.from_service_account_file(cred_path, scopes=SCOPES)
+    """Cria o objeto Credentials priorizando ambiente de Streamlit Cloud.
 
-    # 2) Secrets no Streamlit (dict ou string JSON)
+    Ordem de busca:
+    1) Secrets do Streamlit (google_service_account | GOOGLE_SERVICE_ACCOUNT_JSON | gcp_service_account)
+    2) JSON em variável de ambiente (GOOGLE_SERVICE_ACCOUNT_JSON)
+    3) Arquivo local (GOOGLE_APPLICATION_CREDENTIALS) — apenas como fallback para dev local
+    """
+    # 1) Secrets no Streamlit (dict ou string JSON)
     for key in ("google_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON", "gcp_service_account"):
         raw = _get_secret(key)
         if raw is None:
@@ -53,7 +50,7 @@ def get_credentials() -> Credentials:
         except Exception:
             continue
 
-    # 3) JSON em variável de ambiente
+    # 2) JSON em variável de ambiente
     sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if sa_json:
         try:
@@ -63,8 +60,13 @@ def get_credentials() -> Credentials:
         except Exception:
             pass
 
+    # 3) Arquivo local (fallback para desenvolvimento)
+    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip().strip("\"'")
+    if cred_path and os.path.exists(cred_path):
+        return Credentials.from_service_account_file(cred_path, scopes=SCOPES)
+
     raise FileNotFoundError(
-        "Credenciais não encontradas. Defina GOOGLE_APPLICATION_CREDENTIALS (arquivo) ou um secret com a chave da service account."
+        "Credenciais não encontradas. Configure um secret do Streamlit (google_service_account) ou defina GOOGLE_SERVICE_ACCOUNT_JSON."
     )
 
 

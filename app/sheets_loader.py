@@ -1,16 +1,63 @@
 from __future__ import annotations
 from typing import List
+import os
+import json
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from .settings import get_settings
 
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
 ]
+
+
+def get_credentials() -> Credentials:
+    """Cria credenciais da Service Account (Cloud-first).
+
+    Ordem de busca:
+    1) Secrets do Streamlit (google_service_account | GOOGLE_SERVICE_ACCOUNT_JSON | gcp_service_account)
+    2) JSON em variável de ambiente (GOOGLE_SERVICE_ACCOUNT_JSON)
+    3) Caminho de arquivo (GOOGLE_APPLICATION_CREDENTIALS) — fallback local
+    """
+    # 1) secrets no Streamlit Cloud
+    try:
+        import streamlit as st
+        for key in ("google_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON", "gcp_service_account"):
+            try:
+                if key in st.secrets:
+                    sa_info = st.secrets[key]
+                    if isinstance(sa_info, str):
+                        sa_info = json.loads(sa_info)
+                    if isinstance(sa_info, dict):
+                        return Credentials.from_service_account_info(sa_info, scopes=SCOPES)
+            except Exception:
+                continue
+    except Exception:
+        # st.secrets pode não estar disponível em alguns contextos
+        pass
+
+    # 2) JSON em variável de ambiente
+    sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    if sa_json:
+        try:
+            info = json.loads(sa_json)
+            if isinstance(info, dict):
+                return Credentials.from_service_account_info(info, scopes=SCOPES)
+        except Exception:
+            pass
+
+    # 3) caminho local
+    creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip().strip("\"'")
+    if creds_path and os.path.exists(creds_path):
+        return Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+
+    # Sem fonte válida
+    raise FileNotFoundError(
+        "Credenciais da Service Account não encontradas. Configure um secret do Streamlit (google_service_account) ou a variável GOOGLE_SERVICE_ACCOUNT_JSON."
+    )
 
 
 def _num(v) -> float:
@@ -35,8 +82,7 @@ def collect_sheet_ids(folder_id: str | None, extra_ids: list[str]) -> list[str]:
     """Lista IDs de planilhas Google Sheets dentro da pasta (não recursivo) + extra_ids, sem duplicar."""
     ids: List[str] = []
     if folder_id:
-        settings = get_settings()
-        creds = Credentials.from_service_account_file(settings.GOOGLE_APPLICATION_CREDENTIALS, scopes=SCOPES)
+        creds = get_credentials()
         drive = build('drive', 'v3', credentials=creds, cache_discovery=False)
         q = f"mimeType='application/vnd.google-apps.spreadsheet' and trashed=false and '{folder_id}' in parents"
         page_token = None
@@ -55,8 +101,7 @@ def collect_sheet_ids(folder_id: str | None, extra_ids: list[str]) -> list[str]:
 
 def load_raw_rows(sheet_ids: list[str], sheet_range: str, year: int | None, months: list[int]) -> pd.DataFrame:
     """Baixa valores via Sheets API e retorna DataFrame com colunas padronizadas + mes/ano."""
-    settings = get_settings()
-    creds = Credentials.from_service_account_file(settings.GOOGLE_APPLICATION_CREDENTIALS, scopes=SCOPES)
+    creds = get_credentials()
     gc = gspread.authorize(creds)
     frames: List[pd.DataFrame] = []
     required = ["Data", "ID_Transacao", "Produto", "Categoria", "Regiao", "Quantidade", "Preco_Unitario", "Receita_Total"]
