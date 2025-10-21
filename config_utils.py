@@ -22,7 +22,9 @@ SCOPES = [
 def _get_secret(key: str):
     if _HAS_STREAMLIT and hasattr(st, "secrets"):
         try:
-            return st.secrets.get(key)  # type: ignore[attr-defined]
+            sec = st.secrets  # type: ignore[attr-defined]
+            if key in sec:
+                return sec[key]
         except Exception:
             return None
     return None

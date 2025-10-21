@@ -208,14 +208,23 @@ def main():
                 # secrets
                 try:
                     import streamlit as _st
-                    sec = getattr(_st, "secrets", {})
-                    if isinstance(sec, dict):
-                        keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = "GOOGLE_SERVICE_ACCOUNT_JSON" in sec
-                        keys["google_service_account"] = "google_service_account" in sec
-                        keys["gcp_service_account"] = "gcp_service_account" in sec
-                        keys["SHEETS_FOLDER_ID"] = keys["SHEETS_FOLDER_ID"] or ("SHEETS_FOLDER_ID" in sec and str(sec.get("SHEETS_FOLDER_ID", "")).strip() != "")
-                        keys["SHEETS_IDS"] = keys["SHEETS_IDS"] or ("SHEETS_IDS" in sec and str(sec.get("SHEETS_IDS", "")).strip() != "")
-                        keys["SHEET_RANGE"] = keys["SHEET_RANGE"] or ("SHEET_RANGE" in sec and str(sec.get("SHEET_RANGE", "")).strip() != "")
+                    sec = getattr(_st, "secrets", None)
+                    if sec is not None:
+                        try:
+                            if "GOOGLE_SERVICE_ACCOUNT_JSON" in sec:
+                                keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = True
+                            if "google_service_account" in sec:
+                                keys["google_service_account"] = True
+                            if "gcp_service_account" in sec:
+                                keys["gcp_service_account"] = True
+                            if "SHEETS_FOLDER_ID" in sec and str(sec["SHEETS_FOLDER_ID"]).strip():
+                                keys["SHEETS_FOLDER_ID"] = True
+                            if "SHEETS_IDS" in sec and str(sec["SHEETS_IDS"]).strip():
+                                keys["SHEETS_IDS"] = True
+                            if "SHEET_RANGE" in sec and str(sec["SHEET_RANGE"]).strip():
+                                keys["SHEET_RANGE"] = True
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 # env
