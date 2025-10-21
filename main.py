@@ -181,19 +181,68 @@ def main():
                 st.rerun()
             except Exception as e:
                 st.error(f"Falha ao recarregar: {e}")
-        # Diagnóstico (fonte de credencial e últimas falhas)
-        if loader is not None:
+        # Diagnóstico (sempre visível) – mostra por que está zerado e quais configs/secrets foram detectados
+        st.divider()
+        with st.expander("Diagnóstico (detalhes)"):
+            st.caption("Apenas para suporte e investigação de acesso no Cloud")
+            diag_err = None
+            # Usa o loader atual se existir; senão cria um temporário só para inspecionar status
             try:
-                st.divider()
-                with st.expander("Diagnóstico (detalhes)"):
-                    st.caption("Apenas para suporte e investigação de acesso no Cloud")
-                    st.json({
-                        "status": loader.status().get("debug", {}),
-                        "resolved_sheet_ids_preview": (loader.status().get("resolved_sheet_ids", []) or [])[:5],
-                        "folder_id": loader.status().get("sheets_folder_id", "")
-                    })
-            except Exception:
-                pass
+                _diag_loader = loader if loader is not None else SheetsLoader()
+                _status = _diag_loader.status()
+            except Exception as _e:
+                diag_err = str(_e)
+                _status = {"configured": False}
+
+            # Presença de secrets e env (sem vazar valores)
+            def _presence_snapshot():
+                keys = {
+                    "GOOGLE_SERVICE_ACCOUNT_JSON": False,
+                    "google_service_account": False,
+                    "gcp_service_account": False,
+                    "SHEETS_FOLDER_ID": False,
+                    "SHEETS_IDS": False,
+                    "SHEET_RANGE": False,
+                    "GOOGLE_APPLICATION_CREDENTIALS (file exists)": False,
+                }
+                # secrets
+                try:
+                    import streamlit as _st
+                    sec = getattr(_st, "secrets", {})
+                    if isinstance(sec, dict):
+                        keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = "GOOGLE_SERVICE_ACCOUNT_JSON" in sec
+                        keys["google_service_account"] = "google_service_account" in sec
+                        keys["gcp_service_account"] = "gcp_service_account" in sec
+                        keys["SHEETS_FOLDER_ID"] = keys["SHEETS_FOLDER_ID"] or ("SHEETS_FOLDER_ID" in sec and str(sec.get("SHEETS_FOLDER_ID", "")).strip() != "")
+                        keys["SHEETS_IDS"] = keys["SHEETS_IDS"] or ("SHEETS_IDS" in sec and str(sec.get("SHEETS_IDS", "")).strip() != "")
+                        keys["SHEET_RANGE"] = keys["SHEET_RANGE"] or ("SHEET_RANGE" in sec and str(sec.get("SHEET_RANGE", "")).strip() != "")
+                except Exception:
+                    pass
+                # env
+                env = os.environ
+                if str(env.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")).strip():
+                    keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = True
+                if str(env.get("SHEETS_FOLDER_ID", "")).strip():
+                    keys["SHEETS_FOLDER_ID"] = True
+                if str(env.get("SHEETS_IDS", "")).strip():
+                    keys["SHEETS_IDS"] = True
+                if str(env.get("SHEET_RANGE", "")).strip():
+                    keys["SHEET_RANGE"] = True
+                creds_path = str(env.get("GOOGLE_APPLICATION_CREDENTIALS", "")).strip().strip("\"'")
+                if creds_path and os.path.isfile(creds_path):
+                    keys["GOOGLE_APPLICATION_CREDENTIALS (file exists)"] = True
+                return keys
+
+            st.json({
+                "configured": _status.get("configured", False),
+                "sheets_folder_id": _status.get("sheets_folder_id", ""),
+                "resolved_sheet_ids_preview": (_status.get("resolved_sheet_ids", []) or [])[:5],
+                "debug": _status.get("debug", {}),
+                "presence": _presence_snapshot(),
+            })
+            if diag_err:
+                st.warning(f"Diagnóstico parcial: {diag_err}")
+            st.caption("Se 'configured' for False, verifique se o Service Account e SHEETS_FOLDER_ID/SHEETS_IDS estão definidos nos Secrets do Streamlit.")
         # Prévia por aba (nome e número de linhas)
         if loader is not None:
             try:
