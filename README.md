@@ -50,14 +50,20 @@ Um chatbot moderno e elegante desenvolvido em Python com Streamlit, integrado à
    - ✅ A API key será carregada automaticamente do .env
    - ✅ Conexão com a API será estabelecida automaticamente
    - ✅ Status será mostrado na barra lateral
+## 🚀 Como Usar
 
-4. Comece a conversar imediatamente - não precisa configurar nada!
-
-## 🚀 Deploy e Produção
-
-### Para Streamlit Cloud / Heroku / Railway:
-
+### 1. Pré-requisitos
 1. **Configure as variáveis de ambiente:**
+ - Python 3.8 ou superior
+ - Chave da API Abacus: `s2_7ec8cf43a89443bf91d9954336134bf0`
+- **Configure o arquivo .env (local):**
+   - Copie `.env.example` para `.env` e preencha:
+      - `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH` (caminho ABSOLUTO para o JSON da Service Account, fora do repositório)
+      - `SHEETS_FOLDER_ID` (ID da pasta no Google Drive com as planilhas/arquivos)
+      - `SHEETS_IDS` (opcional, CSV de IDs adicionais de planilhas)
+      - `SHEET_RANGE` (ex.: `A:ZZZ`)
+      - `ABACUS_API_KEY` e `MODEL_NAME`
+   - Para deploy, use secrets/variáveis de ambiente do provedor (não commite segredos)
    ```
    ABACUS_API_KEY=s2_7ec8cf43a89443bf91d9954336134bf0
    MODEL_NAME=gemini-2.5-flash
@@ -80,28 +86,25 @@ Um chatbot moderno e elegante desenvolvido em Python com Streamlit, integrado à
 - **Barra Lateral Informativa**: Status da conexão, estatísticas e controles
 - **Timestamps**: Horário de cada mensagem
 - **Indicadores Visuais**: Status de conexão com cores e ícones
-
-### Funcionalidades:
-- **Conectar/Desconectar**: Gerenciar conexão com a API
-- **Limpar Chat**: Reiniciar a conversa
+1. **Configurar Secrets no Streamlit Cloud:**
+    - Adicione no Secrets (raiz):
+       - `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` com o conteúdo JSON como string (Service Account)
+       - `SHEETS_FOLDER_ID`, `SHEET_RANGE`, `ABACUS_API_KEY`, `MODEL_NAME`
+    - Alternativamente, você pode usar seções `[google_service_account]` e `[sheets]`.
+    - Dica: Compartilhe a pasta do Drive com o e-mail `client_email` da Service Account (do secret).
 - **Estatísticas**: Contador de mensagens em tempo real
 - **Modelo Display**: Informações sobre o modelo em uso
 
-## 🛠️ Estrutura do Projeto
-
-```
-bot/
-├── main.py              # Aplicação principal Streamlit
 ├── abacus_client.py     # Cliente para API da Abacus
 ├── requirements.txt     # Dependências do projeto
 └── README.md           # Esta documentação
+- Não versione arquivos JSON de credenciais. Use `st.secrets` no Cloud e `.env` local apontando para um caminho fora do repositório.
+- O diretório `Keys/` está no `.gitignore`, mas se algum JSON tiver sido commitado no histórico, considere revogar/rotacionar as credenciais e reescrever o histórico.
 ```
 
 ## 📋 Dependências
 
 - **streamlit**: Framework para interface web
-- **requests**: Para requisições HTTP à API
-- **python-dotenv**: Para gerenciamento de variáveis de ambiente
 
 ## 🔧 Configuração Avançada
 

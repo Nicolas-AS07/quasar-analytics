@@ -8,6 +8,11 @@ from datetime import datetime
 from dotenv import load_dotenv
 from abacus_client import AbacusClient
 from sheets_loader import SheetsLoader
+from app.config import (
+    get_abacus_api_key,
+    get_model_name,
+    get_service_account_email,
+)
 from ui_styles import render_css
 import json
 import time
@@ -32,45 +37,9 @@ render_css("dark")
 # ============================================
 
 def get_env_config():
-    """Obtém configurações priorizando Streamlit Cloud (secrets) e depois env.
-
-    Busca por:
-    - ABACUS_API_KEY (raiz dos secrets ou em [abacus])
-    - MODEL_NAME (raiz ou em [abacus], fallback gemini-2.5-pro)
-    """
-    api_key = ""
-    model = "gemini-2.5-pro"
-    # 1) Secrets (Cloud-first)
-    try:
-        sec = getattr(st, "secrets", None)
-        if sec is not None:
-            if "ABACUS_API_KEY" in sec and str(sec["ABACUS_API_KEY"]).strip():
-                api_key = str(sec["ABACUS_API_KEY"]).strip()
-            elif "abacus" in sec:
-                ab = sec["abacus"]
-                if isinstance(ab, dict):
-                    if "ABACUS_API_KEY" in ab and str(ab["ABACUS_API_KEY"]).strip():
-                        api_key = str(ab["ABACUS_API_KEY"]).strip()
-                    elif "API_KEY" in ab and str(ab["API_KEY"]).strip():
-                        api_key = str(ab["API_KEY"]).strip()
-            # model
-            if "MODEL_NAME" in sec and str(sec["MODEL_NAME"]).strip():
-                model = str(sec["MODEL_NAME"]).strip()
-            elif "abacus" in sec:
-                ab = sec["abacus"]
-                if isinstance(ab, dict):
-                    if "MODEL_NAME" in ab and str(ab["MODEL_NAME"]).strip():
-                        model = str(ab["MODEL_NAME"]).strip()
-                    elif "model" in ab and str(ab["model"]).strip():
-                        model = str(ab["model"]).strip()
-    except Exception:
-        pass
-    # 2) Variáveis de ambiente (fallback)
-    if not api_key:
-        api_key = os.getenv("ABACUS_API_KEY", "").strip()
-    env_model = os.getenv("MODEL_NAME", "").strip()
-    if env_model:
-        model = env_model
+    """Lê API key e modelo via config central (Cloud-first)."""
+    api_key = get_abacus_api_key() or ""
+    model = get_model_name("gemini-2.5-pro")
     return api_key, model
 
 
@@ -194,6 +163,18 @@ def main():
         if last_loaded:
             st.caption(f"Última atualização: {last_loaded}")
         st.divider()
+        # Instrução de compartilhamento da pasta com a Service Account
+        sa_email = get_service_account_email()
+        if sa_email:
+            st.info(
+                f"Para o carregamento funcionar no Cloud, compartilhe a pasta do Drive (SHEETS_FOLDER_ID) com o e-mail da Service Account: {sa_email}",
+                icon="ℹ️",
+            )
+        else:
+            st.info(
+                "Adicione as credenciais da Service Account no secret do Streamlit (GOOGLE_SERVICE_ACCOUNT_CREDENTIALS) ou configure GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH no .env local.",
+                icon="ℹ️",
+            )
         # Modo básico: sem Context Builder na UI
         # TTL: controles de recarga automática
         st.markdown("#### ⚙️ Recarga automática (TTL)")
