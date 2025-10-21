@@ -50,7 +50,58 @@ def _secrets_get(path: Tuple[str, ...]) -> Optional[Any]:
         return None
 
 
+def _get_credentials_json() -> Optional[str]:
+    """Função específica para obter o JSON das credenciais com diferentes tentativas."""
+    # Tenta diferentes formatos comuns no Streamlit Cloud
+    attempts = [
+        ("st.secrets GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", _secrets_get(("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS",))),
+        ("env GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")),
+        ("st.secrets google_service_account block", _secrets_get(("google_service_account",))),
+    ]
+    
+    for source, val in attempts:
+        if not val:
+            continue
+            
+        # Se é dict (bloco TOML), converte para JSON
+        if isinstance(val, dict):
+            try:
+                return json.dumps(val)
+            except:
+                continue
+                
+        # Se é string, limpa e valida
+        if isinstance(val, str):
+            cleaned = val.strip().strip('"').strip("'")
+            if cleaned and (cleaned.startswith('{') or cleaned.startswith('"{')):
+                # Remove aspas extras se JSON estiver entre aspas
+                if cleaned.startswith('"') and cleaned.endswith('"'):
+                    cleaned = cleaned[1:-1]
+                # Decodifica escape sequences se necessário
+                try:
+                    if '\\n' in cleaned or '\\' in cleaned:
+                        cleaned = cleaned.encode().decode('unicode_escape')
+                except:
+                    pass
+                    
+                # Debug apenas se Streamlit disponível
+                if _HAS_STREAMLIT:
+                    try:
+                        import streamlit as st
+                        st.write(f"🔍 Tentando {source}: {len(cleaned)} chars")
+                    except:
+                        pass
+                
+                return cleaned
+                
+    return None
+
+
 def get_str_setting(*names: str, default: Optional[str] = None) -> Optional[str]:
+    # Para credenciais, usa função específica
+    if names and names[0] == "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS":
+        return _get_credentials_json()
+        
     # 1) raiz
     for name in names:
         val = _secrets_get((name,))
@@ -107,22 +158,70 @@ def get_list_setting(*names: str) -> List[str]:
 # ---------------- Credenciais ----------------
 def get_google_service_account_credentials():
     """
-    Prioridade:
-      1) st.secrets["GOOGLE_SERVICE_ACCOUNT_CREDENTIALS"] (JSON string)
-      2) st.secrets["google_service_account"] (tabela TOML)  OU  st.secrets["gcp_service_account"]
+    Prioridade (otimizada para Streamlit Cloud):
+      1) st.secrets["GOOGLE_SERVICE_ACCOUNT_CREDENTIALS"] (JSON string) - RECOMENDADO PARA CLOUD
+      2) st.secrets["google_service_account"] (tabela TOML) - para desenvolvimento local
       3) GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH / GOOGLE_APPLICATION_CREDENTIALS (arquivo)
     Retorna: google.oauth2.service_account.Credentials
     """
-    # 1) JSON string explícito
+    # 1) JSON string explícito (MELHOR para Streamlit Cloud)
     try:
         js = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")
         if js:
+            # Remove possíveis aspas extras e whitespace
+            js = js.strip().strip('"').strip("'")
+            
+            # Debug para Streamlit Cloud
+            if _HAS_STREAMLIT:
+                try:
+                    import streamlit as st
+                    st.write(f"🔍 DEBUG: JSON string tem {len(js)} caracteres")
+                    st.write(f"🔍 DEBUG: Começa com: '{js[:50]}...'")
+                except:
+                    pass
+            
             info = json.loads(js)
-            return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
-    except Exception:
-        pass
+            if isinstance(info, dict) and info.get("client_email"):
+                if _HAS_STREAMLIT:
+                    try:
+                        import streamlit as st
+                        st.success(f"✅ Credenciais carregadas! Email: {info.get('client_email')}")
+                    except:
+                        pass
+                return service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+            else:
+                error_msg = f"JSON parseado mas não tem client_email. Keys: {list(info.keys()) if isinstance(info, dict) else 'não é dict'}"
+                if _HAS_STREAMLIT:
+                    try:
+                        import streamlit as st
+                        st.error(f"❌ {error_msg}")
+                    except:
+                        print(f"DEBUG: {error_msg}")
+                else:
+                    print(f"DEBUG: {error_msg}")
+                    
+    except json.JSONDecodeError as e:
+        error_msg = f"Erro ao fazer parse do JSON em GOOGLE_SERVICE_ACCOUNT_CREDENTIALS: {e}"
+        if _HAS_STREAMLIT:
+            try:
+                import streamlit as st
+                st.error(f"❌ JSON Error: {error_msg}")
+            except:
+                print(f"DEBUG: {error_msg}")
+        else:
+            print(f"DEBUG: {error_msg}")
+    except Exception as e:
+        error_msg = f"Erro inesperado ao processar GOOGLE_SERVICE_ACCOUNT_CREDENTIALS: {e}"
+        if _HAS_STREAMLIT:
+            try:
+                import streamlit as st
+                st.error(f"❌ {error_msg}")
+            except:
+                print(f"DEBUG: {error_msg}")
+        else:
+            print(f"DEBUG: {error_msg}")
 
-    # 2) Bloco [google_service_account] ou [gcp_service_account]
+    # 2) Bloco [google_service_account] ou [gcp_service_account] (para dev local)
     for key in ("google_service_account", "gcp_service_account"):
         try:
             obj = _secrets_get((key,))
@@ -136,16 +235,34 @@ def get_google_service_account_credentials():
         except Exception:
             pass
 
-    # 3) Caminho de arquivo
+    # 3) Caminho de arquivo (para desenvolvimento local)
     path = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS")
     if path and os.path.isfile(path):
-        return service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
+        try:
+            return service_account.Credentials.from_service_account_file(path, scopes=SCOPES)
+        except Exception as e:
+            raise RuntimeError(f"Erro ao carregar credenciais do arquivo {path}: {e}")
 
+    # Debug: mostra o que está disponível
+    debug_info = []
+    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS definido: {bool(get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS', required=False))}")
+    debug_info.append(f"google_service_account (secrets): {bool(_secrets_get(('google_service_account',)))}")
+    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH: {get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH', required=False)}")
+    
+    if _HAS_STREAMLIT:
+        try:
+            import streamlit as st
+            st.error("❌ Nenhuma credencial válida encontrada!")
+            st.info("🔍 Debug info:\n" + "\n".join(debug_info))
+        except:
+            pass
+    
     raise RuntimeError(
         "Não foi possível localizar as credenciais da Service Account. "
         "Defina 'GOOGLE_SERVICE_ACCOUNT_CREDENTIALS' nos secrets (JSON como string) "
         "ou use o bloco [google_service_account], ou ainda a env var "
-        "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH apontando para um arquivo."
+        "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH apontando para um arquivo.\n\n"
+        f"Debug: {'; '.join(debug_info)}"
     )
 
 
