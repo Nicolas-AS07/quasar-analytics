@@ -22,18 +22,49 @@ class SheetsLoader:
                  creds_path: Optional[str] = None,
                  sheet_ids: Optional[List[str]] = None,
                  sheet_range: str = "A:Z") -> None:
+        # Helper para ler de st.secrets se disponível (Cloud) ou env local
+        def _get_secret(key: str) -> Optional[Any]:
+            try:
+                import streamlit as st
+                if key in st.secrets:
+                    return st.secrets[key]
+            except Exception:
+                pass
+            return None
+
         self.creds_path = (creds_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()).strip()
         # remover aspas acidentais
         if (self.creds_path.startswith('"') and self.creds_path.endswith('"')) or (self.creds_path.startswith("'") and self.creds_path.endswith("'")):
             self.creds_path = self.creds_path[1:-1]
-        ids_env = os.getenv("SHEETS_IDS", "")
+
+        # SHEETS_IDS: pode vir de env (string) ou de secrets (string ou lista)
+        ids_env = os.getenv("SHEETS_IDS", "").strip()
+        if not ids_env:
+            ids_sec = _get_secret("SHEETS_IDS")
+            if ids_sec is not None:
+                if isinstance(ids_sec, list):
+                    ids_env = ",".join([str(x).strip() for x in ids_sec if str(x).strip()])
+                else:
+                    ids_env = str(ids_sec).strip()
         self.sheet_ids = sheet_ids or [s.strip() for s in ids_env.split(",") if s.strip()]
-        # Pasta do Drive (opcional). Se definida, terá precedência sobre SHEETS_IDS
+
+        # Pasta do Drive: de env ou secrets
         folder_env = os.getenv("SHEETS_FOLDER_ID", "").strip()
+        if not folder_env:
+            fsec = _get_secret("SHEETS_FOLDER_ID")
+            if fsec is not None:
+                folder_env = str(fsec).strip()
         if (folder_env.startswith('"') and folder_env.endswith('"')) or (folder_env.startswith("'") and folder_env.endswith("'")):
             folder_env = folder_env[1:-1]
         self.sheet_folder_id: str = folder_env
-        self.sheet_range = os.getenv("SHEET_RANGE", sheet_range)
+
+        # Intervalo padrão
+        range_env = os.getenv("SHEET_RANGE", "").strip()
+        if not range_env:
+            rsec = _get_secret("SHEET_RANGE")
+            if rsec is not None:
+                range_env = str(rsec).strip()
+        self.sheet_range = range_env or sheet_range
 
         self._gc = None
         self._drive = None
