@@ -123,40 +123,84 @@ class SheetsLoader:
                 # Se não conseguiu criar cliente Drive, fallback para SHEETS_IDS
                 return self.sheet_ids
             folder_id = self.sheet_folder_id
-            q = f"'{folder_id}' in parents and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"
-            ids: List[str] = []
-            page_token: Optional[str] = None
-            try:
-                while True:
-                    resp = self._drive.files().list(
-                        q=q,
-                        fields="nextPageToken, files(id, name, mimeType, parents)",
-                        pageToken=page_token,
-                        includeItemsFromAllDrives=True,
-                        supportsAllDrives=True,
-                        corpora="allDrives",
-                        spaces="drive",
-                    ).execute()
-                    for f in resp.get("files", []):
-                        fid = f.get("id")
-                        if fid:
-                            ids.append(fid)
-                    page_token = resp.get("nextPageToken")
-                    if not page_token:
-                        break
-                # Se a pasta estiver vazia, talvez o ID fornecido seja de uma planilha, não de pasta
-                if not ids:
+            def list_spreadsheets_recursive(root_id: str) -> List[str]:
+                ids: List[str] = []
+                folders_to_visit: List[str] = [root_id]
+                visited: set[str] = set()
+                while folders_to_visit:
+                    current = folders_to_visit.pop(0)
+                    if current in visited:
+                        continue
+                    visited.add(current)
+                    # 1) Planilhas diretamente nesta pasta (inclui atalhos)
                     try:
-                        # Verifica se é um spreadsheet válido
+                        page_token: Optional[str] = None
+                        while True:
+                            resp = self._drive.files().list(
+                                q=f"'{current}' in parents and trashed=false and (mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.google-apps.shortcut')",
+                                fields=(
+                                    "nextPageToken, files(id, name, mimeType, parents, "
+                                    "shortcutDetails(targetId, targetMimeType))"
+                                ),
+                                pageToken=page_token,
+                                includeItemsFromAllDrives=True,
+                                supportsAllDrives=True,
+                                corpora="allDrives",
+                                spaces="drive",
+                            ).execute()
+                            for f in resp.get("files", []):
+                                mt = f.get("mimeType")
+                                if mt == "application/vnd.google-apps.spreadsheet":
+                                    fid = f.get("id")
+                                    if fid:
+                                        ids.append(fid)
+                                elif mt == "application/vnd.google-apps.shortcut":
+                                    sd = f.get("shortcutDetails", {}) or {}
+                                    tgt_id = sd.get("targetId")
+                                    tgt_mt = sd.get("targetMimeType")
+                                    if tgt_id and tgt_mt == "application/vnd.google-apps.spreadsheet":
+                                        ids.append(tgt_id)
+                            page_token = resp.get("nextPageToken")
+                            if not page_token:
+                                break
+                    except Exception:
+                        pass
+                    # 2) Subpastas
+                    try:
+                        page_token2: Optional[str] = None
+                        while True:
+                            resp2 = self._drive.files().list(
+                                q=f"'{current}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'",
+                                fields="nextPageToken, files(id)",
+                                pageToken=page_token2,
+                                includeItemsFromAllDrives=True,
+                                supportsAllDrives=True,
+                                corpora="allDrives",
+                                spaces="drive",
+                            ).execute()
+                            for f2 in resp2.get("files", []):
+                                sfid = f2.get("id")
+                                if sfid:
+                                    folders_to_visit.append(sfid)
+                            page_token2 = resp2.get("nextPageToken")
+                            if not page_token2:
+                                break
+                    except Exception:
+                        pass
+                # Remove duplicados preservando ordem
+                return list(dict.fromkeys(ids))
+
+            try:
+                ids = list_spreadsheets_recursive(folder_id)
+                if not ids:
+                    # Se a pasta estiver vazia ou sem acesso, talvez o ID seja de uma planilha
+                    try:
                         self._gc.open_by_key(folder_id)
                         return [folder_id]
                     except Exception:
                         pass
             except Exception:
-                # Em qualquer falha, retorna os SHEETS_IDS explícitos
                 return self.sheet_ids
-            # Remover duplicadas mantendo ordem
-            ids = list(dict.fromkeys(ids))
             return ids
         # Fallback: ids explícitos
         return self.sheet_ids
