@@ -77,27 +77,7 @@ def display_chat_messages() -> None:
 
 
 def initialize_session() -> None:
-    """Inicializa variáveis de sessão e carrega planilhas com TTL (sem conflito de defaults)."""
-    # ========== DEBUG INFO ALWAYS SHOWN ==========
-    st.write("🔍 **DEBUG INICIAL**")
-    st.write(f"📅 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # Mostra informações das credenciais
-    try:
-        service_email = get_service_account_email()
-        if service_email:
-            st.success(f"✅ Service Account detectada: {service_email}")
-        else:
-            st.error("❌ Nenhuma Service Account detectada")
-    except Exception as e:
-        st.error(f"❌ Erro ao verificar Service Account: {e}")
-    
-    # Mostra status das configurações
-    api_key, model = get_env_config()
-    st.write(f"🔑 API Key configurada: {'✅ Sim' if api_key else '❌ Não'}")
-    st.write(f"🤖 Modelo: {model}")
-    
-    # ========== INICIALIZAÇÃO NORMAL ==========
+    """Inicializa variáveis de sessão de forma simplificada."""
     # estado básico
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("client", None)
@@ -111,53 +91,31 @@ def initialize_session() -> None:
         if api_key:
             st.session_state.client = create_client(api_key, model)
 
-    # TTL (NÃO setamos default value no widget + session_state ao mesmo tempo)
+    # TTL
     if "sheets_ttl_enabled" not in st.session_state:
         st.session_state["sheets_ttl_enabled"] = False
     if "sheets_ttl_seconds" not in st.session_state:
         st.session_state["sheets_ttl_seconds"] = 60
 
-    last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
+    # Carrega planilhas de forma simplificada
     loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
 
-    # Decide recarga
-    should_reload = True
-    if st.session_state["sheets_ttl_enabled"] and last_loaded_ts:
-        try:
-            age = time.time() - float(last_loaded_ts)
-            if age < int(st.session_state["sheets_ttl_seconds"]):
-                should_reload = False
-        except Exception:
-            should_reload = True
-
-    # Carrega (se configurado)
-    st.write("📊 **CARREGAMENTO DE PLANILHAS**")
-    st.write(f"📁 Loader configurado: {'✅ Sim' if loader.is_configured() else '❌ Não'}")
-    
     if loader.is_configured():
-        st.write(f"🔄 Deve recarregar: {'✅ Sim' if should_reload else '❌ Não (cache válido)'}")
         try:
-            if should_reload:
-                st.write("⏳ Carregando planilhas...")
-                n_sheets, n_rows = loader.load_all()
-                st.session_state.sheets = loader
-                st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
-                st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state.sheets_last_loaded_ts = time.time()
-                st.success(f"✅ Carregadas {n_sheets} planilhas com {n_rows} linhas!")
-            else:
-                st.session_state.sheets = loader
-                st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
-                st.info("ℹ️ Usando cache válido")
+            st.success("✅ SheetsLoader configurado corretamente!")
+            n_sheets, n_rows = loader.load_all()
+            st.session_state.sheets = loader
+            st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
+            st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.success(f"📊 Detectadas {n_sheets} planilhas!")
         except Exception as e:
-            st.session_state.sheets = st.session_state.get("sheets")
-            st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
-            st.error(f"❌ Falha ao carregar planilhas: {e}")
-            st.warning("⚠️ Mantendo cache anterior se disponível")
+            st.error(f"❌ Erro ao carregar planilhas: {e}")
+            st.session_state.sheets = None
+            st.session_state.sheets_status = {"sheets": 0, "rows": 0}
     else:
+        st.warning("⚠️ SheetsLoader não configurado - verifique credenciais e SHEETS_FOLDER_ID")
         st.session_state.sheets = None
         st.session_state.sheets_status = {"sheets": 0, "rows": 0}
-        st.warning("⚠️ Loader não configurado - verifique credenciais")
 
 
 # -------------------------------------------------------
