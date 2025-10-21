@@ -337,9 +337,9 @@ universe_domain = "googleapis.com\"""", language='toml')
 
     # Debug: mostra o que está disponível
     debug_info = []
-    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS definido: {bool(get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS', required=False))}")
+    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS definido: {bool(get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS'))}")
     debug_info.append(f"google_service_account (secrets): {bool(_secrets_get(('google_service_account',)))}")
-    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH: {get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH', required=False)}")
+    debug_info.append(f"GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH: {get_str_setting('GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH')}")
     
     if _HAS_STREAMLIT:
         try:
