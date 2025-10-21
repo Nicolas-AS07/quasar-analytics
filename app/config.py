@@ -87,12 +87,12 @@ def get_google_service_account_credentials() -> Dict[str, Any]:
     )
 
 
-# Variáveis globais (carregadas na importação, como no projeto funcionando)
-GOOGLE_DRIVE_FOLDER_ID = _get("GOOGLE_DRIVE_FOLDER_ID", default="")
+# Variáveis globais (carregadas na importação; não obrigatórias aqui)
+GOOGLE_DRIVE_FOLDER_ID = _get("GOOGLE_DRIVE_FOLDER_ID", required=False, default="")
 SHEETS_FOLDER_ID = GOOGLE_DRIVE_FOLDER_ID  # Alias
-GEMINI_API_KEY = _get("GEMINI_API_KEY", default="")
-ABACUS_API_KEY = _get("ABACUS_API_KEY", default="")
-MODEL_NAME = _get("MODEL_NAME", default="gemini-2.5-pro")
+GEMINI_API_KEY = _get("GEMINI_API_KEY", required=False, default="")
+ABACUS_API_KEY = _get("ABACUS_API_KEY", required=False, default="")
+MODEL_NAME = _get("MODEL_NAME", required=False, default="gemini-2.5-pro")
 
 
 # Funções getter (compatibilidade com código existente)
