@@ -5,6 +5,9 @@ config.json
 .env
 Keys/
 
+# Secrets do Streamlit (não versionar)
+.streamlit/secrets.toml
+
 # Ambientes virtuais
 .venv/
 venv/

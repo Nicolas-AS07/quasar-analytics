@@ -181,6 +181,19 @@ def main():
                 st.rerun()
             except Exception as e:
                 st.error(f"Falha ao recarregar: {e}")
+        # Diagnóstico (fonte de credencial e últimas falhas)
+        if loader is not None:
+            try:
+                st.divider()
+                with st.expander("Diagnóstico (detalhes)"):
+                    st.caption("Apenas para suporte e investigação de acesso no Cloud")
+                    st.json({
+                        "status": loader.status().get("debug", {}),
+                        "resolved_sheet_ids_preview": (loader.status().get("resolved_sheet_ids", []) or [])[:5],
+                        "folder_id": loader.status().get("sheets_folder_id", "")
+                    })
+            except Exception:
+                pass
         # Prévia por aba (nome e número de linhas)
         if loader is not None:
             try:

@@ -38,6 +38,9 @@ class SheetsLoader:
         self._gc = None
         self._drive = None
         self._cache: Dict[str, pd.DataFrame] = {}
+        # Debug/diagnóstico
+        self._auth_source: Optional[str] = None
+        self._last_errors: List[str] = []
 
     def _auth(self):
         """Autentica usando (prioridade):
@@ -57,8 +60,10 @@ class SheetsLoader:
             try:
                 info = json.loads(sa_json_env)
                 creds = Credentials.from_service_account_info(info, scopes=scopes)
+                self._auth_source = "env:GOOGLE_SERVICE_ACCOUNT_JSON"
             except Exception:
                 creds = None
+                self._last_errors.append("Invalid GOOGLE_SERVICE_ACCOUNT_JSON env value")
 
         # 2) Tentar via st.secrets (quando em Streamlit Cloud)
         if creds is None:
@@ -70,26 +75,29 @@ class SheetsLoader:
                     try:
                         info = json.loads(str(raw)) if not isinstance(raw, dict) else raw
                         creds = Credentials.from_service_account_info(info, scopes=scopes)
+                        self._auth_source = "secrets:GOOGLE_SERVICE_ACCOUNT_JSON"
                     except Exception:
-                        pass
+                        self._last_errors.append("Invalid secrets.GOOGLE_SERVICE_ACCOUNT_JSON")
                 # b) dict completo em secrets (google_service_account ou gcp_service_account)
                 if creds is None and "google_service_account" in st.secrets:
                     raw = st.secrets["google_service_account"]
                     if isinstance(raw, dict):
                         try:
                             creds = Credentials.from_service_account_info(raw, scopes=scopes)
+                            self._auth_source = "secrets:google_service_account"
                         except Exception:
-                            pass
+                            self._last_errors.append("Invalid secrets.google_service_account dict")
                 if creds is None and "gcp_service_account" in st.secrets:
                     raw = st.secrets["gcp_service_account"]
                     if isinstance(raw, dict):
                         try:
                             creds = Credentials.from_service_account_info(raw, scopes=scopes)
+                            self._auth_source = "secrets:gcp_service_account"
                         except Exception:
-                            pass
+                            self._last_errors.append("Invalid secrets.gcp_service_account dict")
             except Exception:
                 # Streamlit pode não estar disponível (execução CLI/testes)
-                pass
+                self._last_errors.append("st.secrets unavailable")
 
         # 3) Fallback: arquivo em caminho local
         if creds is None:
@@ -98,13 +106,15 @@ class SheetsLoader:
                     "Credenciais da Service Account não encontradas. Configure GOOGLE_SERVICE_ACCOUNT_JSON (JSON) ou GOOGLE_APPLICATION_CREDENTIALS (caminho absoluto do arquivo)."
                 )
             creds = Credentials.from_service_account_file(self.creds_path, scopes=scopes)
+            self._auth_source = f"file:{self.creds_path}"
 
         # Autorização gspread e cliente Drive
         self._gc = gspread.authorize(creds)
         try:
             self._drive = build('drive', 'v3', credentials=creds, cache_discovery=False)
-        except Exception:
+        except Exception as e:
             self._drive = None
+            self._last_errors.append(f"Drive client init failed: {e}")
 
     def _ensure_client(self):
         if self._gc is None:
@@ -198,8 +208,9 @@ class SheetsLoader:
                         self._gc.open_by_key(folder_id)
                         return [folder_id]
                     except Exception:
-                        pass
-            except Exception:
+                        self._last_errors.append("Folder ID is not accessible and not a spreadsheet")
+            except Exception as e:
+                self._last_errors.append(f"Drive listing error: {e}")
                 return self.sheet_ids
             return ids
         # Fallback: ids explícitos
@@ -240,19 +251,22 @@ class SheetsLoader:
                             new_cache[key] = df
                             total_rows += len(df)
                             any_loaded = True
-                        except Exception:
+                        except Exception as e:
+                            self._last_errors.append(f"Worksheet read error ({sheet_id}/{ws.title}): {e}")
                             continue
                     if any_loaded:
                         loaded += 1
-                except Exception:
+                except Exception as e:
+                    self._last_errors.append(f"Spreadsheet open error ({sheet_id}): {e}")
                     # Em caso de erro em uma planilha, apenas pula e continua
                     continue
             # Substitui o cache somente após completar
             self._cache = new_cache
             return loaded, total_rows
-        except Exception:
+        except Exception as e:
             # Restaura cache anterior em caso de falha inesperada
             self._cache = prev_cache
+            self._last_errors.append(f"Unexpected load error: {e}")
             raise
 
     def _has_any_credentials(self) -> bool:
@@ -292,6 +306,10 @@ class SheetsLoader:
             "worksheets_count": len(self._cache),
             "resolved_sheet_ids": resolved_ids,
             "loaded": {k: len(v) for k, v in self._cache.items()},
+            "debug": {
+                "auth_source": self._auth_source,
+                "last_errors": self._last_errors[-8:],
+            }
         }
 
     def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
