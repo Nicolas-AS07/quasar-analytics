@@ -272,14 +272,46 @@ universe_domain = "googleapis.com\"""", language='toml')
             print(f"DEBUG: {error_msg}")
     except Exception as e:
         error_msg = f"Erro inesperado ao processar GOOGLE_SERVICE_ACCOUNT_CREDENTIALS: {e}"
+        
+        # Identifica erros específicos comuns
+        if "Incorrect padding" in str(e):
+            error_msg += "\n\n🔧 CAUSA: A private_key está mal formatada ou corrompida."
+            error_msg += "\n\nSOLUÇÕES:"
+            error_msg += "\n1. ✅ Use o bloco [google_service_account] que é mais confiável"
+            error_msg += "\n2. Baixe novamente o arquivo service_account.json do Google Cloud"
+            error_msg += "\n3. Verifique se a private_key não foi cortada/alterada"
+        elif "ValueError" in str(e) or "Invalid" in str(e):
+            error_msg += "\n\n🔧 CAUSA: Formato inválido na private_key."
+            error_msg += "\n\nSOLUÇÃO: ✅ Use o bloco [google_service_account] em vez de JSON string."
+            
         if _HAS_STREAMLIT:
             try:
                 import streamlit as st
                 st.error(f"❌ {error_msg}")
+                
+                # Sempre oferece a solução TOML como alternativa
+                st.success("💡 **SOLUÇÃO RECOMENDADA**: Use o bloco [google_service_account]")
+                st.info("Cole isto nos seus secrets do Streamlit Cloud:")
+                st.code("""[google_service_account]
+type = "service_account"
+project_id = "chatbotaula17"
+private_key_id = "fddef514a2e4ac16bd01c5639eaa2d07d96b17fd"
+private_key = '''-----BEGIN PRIVATE KEY-----
+SUA_CHAVE_PRIVADA_COMPLETA_DO_ARQUIVO_JSON
+-----END PRIVATE KEY-----'''
+client_email = "sheets-reader@chatbotaula17.iam.gserviceaccount.com"
+client_id = "117193447779719276268"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/sheets-reader@chatbotaula17.iam.gserviceaccount.com"
+universe_domain = "googleapis.com\"""", language='toml')
+                st.warning("⚠️ **IMPORTANTE**: Substitua 'SUA_CHAVE_PRIVADA_COMPLETA_DO_ARQUIVO_JSON' pela private_key real do seu arquivo service_account.json")
             except:
                 print(f"DEBUG: {error_msg}")
         else:
             print(f"DEBUG: {error_msg}")
+        # Não levanta erro aqui, continua tentando outros métodos
 
     # 2) Bloco [google_service_account] ou [gcp_service_account] (para dev local)
     for key in ("google_service_account", "gcp_service_account"):
