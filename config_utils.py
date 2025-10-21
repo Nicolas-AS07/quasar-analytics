@@ -34,12 +34,12 @@ def get_credentials() -> Credentials:
     """Cria o objeto Credentials priorizando ambiente de Streamlit Cloud.
 
     Ordem de busca:
-    1) Secrets do Streamlit (google_service_account | GOOGLE_SERVICE_ACCOUNT_JSON | gcp_service_account)
-    2) JSON em variável de ambiente (GOOGLE_SERVICE_ACCOUNT_JSON)
-    3) Arquivo local (GOOGLE_APPLICATION_CREDENTIALS) — apenas como fallback para dev local
+    1) Secrets do Streamlit (google_service_account | gcp_service_account | GOOGLE_SERVICE_ACCOUNT_JSON | GOOGLE_SERVICE_ACCOUNT_CREDENTIALS)
+    2) JSON em variável de ambiente (GOOGLE_SERVICE_ACCOUNT_JSON | GOOGLE_SERVICE_ACCOUNT_CREDENTIALS)
+    3) Arquivo local (GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH | GOOGLE_APPLICATION_CREDENTIALS) — fallback para dev local
     """
     # 1) Secrets no Streamlit (dict ou string JSON)
-    for key in ("google_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON", "gcp_service_account"):
+    for key in ("google_service_account", "gcp_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS"):
         raw = _get_secret(key)
         if raw is None:
             continue
@@ -51,7 +51,7 @@ def get_credentials() -> Credentials:
             continue
 
     # 2) JSON em variável de ambiente
-    sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip() or os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", "").strip()
     if sa_json:
         try:
             info = json.loads(sa_json)
@@ -61,12 +61,17 @@ def get_credentials() -> Credentials:
             pass
 
     # 3) Arquivo local (fallback para desenvolvimento)
-    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip().strip("\"'")
+    cred_path = (
+        os.getenv("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", "").strip().strip("\"'")
+        or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip().strip("\"'")
+    )
     if cred_path and os.path.exists(cred_path):
         return Credentials.from_service_account_file(cred_path, scopes=SCOPES)
 
     raise FileNotFoundError(
-        "Credenciais não encontradas. Configure um secret do Streamlit (google_service_account) ou defina GOOGLE_SERVICE_ACCOUNT_JSON."
+        "Credenciais não encontradas. Configure no Streamlit um secret GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (JSON como string) ou a seção [google_service_account],\n"
+        "ou defina GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (env) com o JSON,\n"
+        "ou aponte GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH/GOOGLE_APPLICATION_CREDENTIALS para um arquivo local."
     )
 
 

@@ -215,6 +215,8 @@ def main():
             def _presence_snapshot():
                 keys = {
                     "GOOGLE_SERVICE_ACCOUNT_JSON": False,
+                    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS": False,
+                    "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH": False,
                     "google_service_account": False,
                     "gcp_service_account": False,
                     "SHEETS_FOLDER_ID": False,
@@ -231,6 +233,8 @@ def main():
                         try:
                             if "GOOGLE_SERVICE_ACCOUNT_JSON" in sec:
                                 keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = True
+                            if "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS" in sec:
+                                keys["GOOGLE_SERVICE_ACCOUNT_CREDENTIALS"] = True
                             if "google_service_account" in sec:
                                 keys["google_service_account"] = True
                             if "gcp_service_account" in sec:
@@ -270,6 +274,8 @@ def main():
                 env = os.environ
                 if str(env.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")).strip():
                     keys["GOOGLE_SERVICE_ACCOUNT_JSON"] = True
+                if str(env.get("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS", "")).strip():
+                    keys["GOOGLE_SERVICE_ACCOUNT_CREDENTIALS"] = True
                 if str(env.get("SHEETS_FOLDER_ID", "")).strip():
                     keys["SHEETS_FOLDER_ID"] = True
                 if str(env.get("SHEETS_IDS", "")).strip():
@@ -278,7 +284,10 @@ def main():
                     keys["SHEET_RANGE"] = True
                 if str(env.get("ABACUS_API_KEY", "")).strip():
                     keys["ABACUS_API_KEY"] = True
-                creds_path = str(env.get("GOOGLE_APPLICATION_CREDENTIALS", "")).strip().strip("\"'")
+                creds_path = (
+                    str(env.get("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", "")).strip().strip("\"'")
+                    or str(env.get("GOOGLE_APPLICATION_CREDENTIALS", "")).strip().strip("\"'")
+                )
                 if creds_path and os.path.isfile(creds_path):
                     keys["GOOGLE_APPLICATION_CREDENTIALS (file exists)"] = True
                 return keys
