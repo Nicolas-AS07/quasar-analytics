@@ -1,322 +1,646 @@
-from __future__ import annotations
+# app/sheets_loader.py
 
-import io
-import re
 import os
-import json
-import unicodedata
-from typing import Any, Dict, List, Optional, Tuple
+import re
+from typing import List, Dict, Any, Optional, Tuple
 
 import pandas as pd
-import streamlit as st
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 
-from .config import (
+from app.config import (
     get_google_service_account_credentials,
-    get_google_apis_services,
     get_sheets_folder_id,
     get_sheets_ids,
     get_sheet_range,
 )
 
 
-# -------------------- Normalização (inspirado no projeto de referência) --------------------
-def _normalize_colname(s: str) -> str:
-    s = str(s or "").strip().lower()
-    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
-    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
-    return s
-
-
-def _coerce_date_series(series: pd.Series) -> pd.Series:
-    dt = pd.to_datetime(series, errors="coerce", dayfirst=True, infer_datetime_format=True)
-    return dt.dt.date
-
-
-def _clean_numeric_series(series: pd.Series) -> pd.Series:
-    # Remove separador de milhar e converte vírgula decimal
-    s = series.astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
-    return pd.to_numeric(s, errors="coerce")
-
-
-def _rename_and_standardize(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df
-    # cabeçalhos
-    cols_norm = {c: _normalize_colname(c) for c in df.columns}
-    df = df.rename(columns=cols_norm)
-    # mapeamento de sinônimos -> alvo
-    synonyms = {
-        "data": ["data", "date", "dt", "dia"],
-        "id_transacao": ["id_transacao", "id", "transacao", "pedido", "nota", "nf", "nfe", "id_pedido"],
-        "produto": ["produto", "item", "produto_nome", "nome_produto"],
-        "categoria": ["categoria", "categoria_produto", "grupo", "familia"],
-        "regiao": ["regiao", "region", "uf", "estado"],
-        "quantidade": ["quantidade", "qtd", "qtde"],
-        "preco_unitario": ["preco_unitario", "preco", "preco_un", "preco_unit", "valor_unitario"],
-        "receita_total": ["receita_total", "receita", "faturamento", "valor_total", "total", "venda_total"],
-    }
-    target_cols: Dict[str, Optional[str]] = {k: None for k in synonyms.keys()}
-    for target, alts in synonyms.items():
-        for alt in alts:
-            if alt in df.columns:
-                target_cols[target] = alt
-                break
-    # renomeia para nomes finais
-    rename_map = {target_cols[k]: k for k in target_cols if target_cols[k]}
-    if rename_map:
-        df = df.rename(columns=rename_map)
-    # coerções
-    if "data" in df.columns:
-        df["data"] = _coerce_date_series(df["data"]).astype("object")
-    if "quantidade" in df.columns:
-        df["quantidade"] = _clean_numeric_series(df["quantidade"])  # pode virar float
-    if "preco_unitario" in df.columns:
-        df["preco_unitario"] = _clean_numeric_series(df["preco_unitario"])  # float
-    if "receita_total" in df.columns:
-        df["receita_total"] = _clean_numeric_series(df["receita_total"])  # float
-    # se não houver receita_total mas houver quantidade * preco_unitario
-    if "receita_total" not in df.columns and {"quantidade", "preco_unitario"}.issubset(df.columns):
-        df["receita_total"] = (df["quantidade"].fillna(0) * df["preco_unitario"].fillna(0))
-    # normaliza capitalização final
-    colmap = {
-        "data": "Data",
-        "id_transacao": "ID_Transacao",
-        "produto": "Produto",
-        "categoria": "Categoria",
-        "regiao": "Regiao",
-        "quantidade": "Quantidade",
-        "preco_unitario": "Preco_Unitario",
-        "receita_total": "Receita_Total",
-    }
-    df = df.rename(columns=colmap)
-    return df
-
-
-def _download_drive_file(drive, file_id: str) -> bytes:
-    request = drive.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    buf.seek(0)
-    return buf.read()
-
-
-def _list_drive_files(drive, folder_id: str) -> List[Dict[str, Any]]:
-    # Google Sheets, CSV, Excel e atalhos
-    q = (
-        f"'{folder_id}' in parents and trashed=false and ("
-        "mimeType='application/vnd.google-apps.spreadsheet' or "
-        "mimeType='application/vnd.google-apps.shortcut' or "
-        "mimeType='text/csv' or "
-        "mimeType='application/vnd.ms-excel' or "
-        "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')"
-    )
-    fields = "nextPageToken, files(id, name, mimeType, shortcutDetails(targetId, targetMimeType))"
-    out: List[Dict[str, Any]] = []
-    page_token: Optional[str] = None
-    while True:
-        resp = drive.files().list(
-            q=q,
-            fields=fields,
-            pageToken=page_token,
-            includeItemsFromAllDrives=True,
-            supportsAllDrives=True,
-            corpora="allDrives",
-            spaces="drive",
-        ).execute()
-        out.extend(resp.get("files", []))
-        page_token = resp.get("nextPageToken")
-        if not page_token:
-            break
-    return out
-
-
-def _sheet_titles(sheets_service, spreadsheet_id: str) -> List[str]:
-    meta = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id, fields="sheets(properties(title))").execute()
-    titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
-    return titles
-
-
-def _should_ignore_tab(title: str) -> bool:
-    t = title.strip().lower()
-    ignore_tokens = ["resumo", "summary", "pivot", "grafic", "dash", "dashboard"]
-    return any(tok in t for tok in ignore_tokens)
-
-
-@st.cache_data(show_spinner=False)
-def load_sales_data_drive_folder(
-    folder_id: Optional[str],
-    extra_ids: Optional[List[str]] = None,
-    sheet_range: str = "A:ZZZ",
-) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
-    """Carrega dados de vendas a partir de arquivos em uma pasta do Drive.
-
-    - Lê Google Sheets via Sheets API (todas as abas, exceto de resumo/pivô)
-    - Lê CSV e Excel via download + pandas
-    - Normaliza colunas e tipos; agrega todos os DataFrames
-    - Retorna (df_agregado, metadados_por_origem)
+class SheetsLoader:
     """
-    drive, sheets = get_google_apis_services()
+    Carrega dados de várias Google Sheets usando Service Account.
 
-    all_sources: List[Dict[str, Any]] = []
-    frames: List[pd.DataFrame] = []
+    Fonte de configuração vem de app.config (que lê st.secrets no Cloud e .env/local).
+    - SHEETS_FOLDER_ID: se definido, lista todas as planilhas da pasta (e atalhos).
+    - SHEETS_IDS: IDs explícitos (separados por vírgula) usados como fallback ou adição.
+    - SHEET_RANGE: intervalo padrão (ex.: A:Z).
+    """
 
-    # 1) Planilhas/arquivos da pasta
-    ids: List[str] = []
-    if folder_id:
-        files = _list_drive_files(drive, folder_id)
-        for f in files:
-            mt = f.get("mimeType")
-            if mt == "application/vnd.google-apps.spreadsheet":
-                ids.append(f.get("id"))
-            elif mt == "application/vnd.google-apps.shortcut":
-                sd = (f.get("shortcutDetails") or {})
-                if sd.get("targetMimeType") == "application/vnd.google-apps.spreadsheet":
-                    ids.append(sd.get("targetId"))
-            else:
-                # CSV/Excel tratados depois (download)
-                all_sources.append({
-                    "file_id": f.get("id"),
-                    "file_name": f.get("name"),
-                    "mimeType": mt,
-                    "type": "file",
-                })
+    def __init__(
+        self,
+        creds_path: Optional[str] = None,         # mantido por compat, não usado
+        sheet_ids: Optional[List[str]] = None,
+        sheet_range: str = "A:Z",
+    ) -> None:
+        # IDs e range vêm do app.config
+        self.sheet_ids = sheet_ids or get_sheets_ids()
+        self.sheet_folder_id: str = get_sheets_folder_id() or ""
+        self.sheet_range = get_sheet_range(sheet_range)
 
-    # 2) IDs adicionais explícitos (apenas Sheets)
-    for x in (extra_ids or []):
-        if x and x not in ids:
-            ids.append(x)
+        # clientes Google API
+        self._sheets = None
+        self._drive = None
 
-    # 3) Sheets API: valores por aba
-    for sid in ids:
+        # cache: chave "<sheet_id>::<worksheet_title>" -> DataFrame
+        self._cache: Dict[str, pd.DataFrame] = {}
+
+        # diagnóstico
+        self._auth_source: Optional[str] = None
+        self._last_errors: List[str] = []
+
+    # -------------------- Autenticação --------------------
+
+    def _auth(self) -> None:
+        """Autentica via app.config e cria clientes Drive/Sheets."""
         try:
-            for title in _sheet_titles(sheets, sid):
-                if _should_ignore_tab(title):
+            creds = get_google_service_account_credentials()
+            self._auth_source = "app.config:get_google_service_account_credentials"
+        except Exception as e:
+            self._last_errors.append(f"Credentials error: {e}")
+            raise
+
+        try:
+            self._drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+            self._sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+        except Exception as e:
+            self._drive = None
+            self._sheets = None
+            self._last_errors.append(f"Google API clients init failed: {e}")
+            raise
+
+    def _ensure_clients(self) -> None:
+        if self._sheets is None or self._drive is None:
+            self._auth()
+
+    # -------------------- Resolução de IDs --------------------
+
+    def _resolve_sheet_ids(self) -> List[str]:
+        """
+        Retorna lista de Sheet IDs:
+        - Se SHEETS_FOLDER_ID estiver definido, lista todos os spreadsheets (e atalhos) da pasta.
+        - Adiciona os SHEETS_IDS explícitos.
+        """
+        ids: List[str] = []
+
+        if self.sheet_folder_id:
+            try:
+                self._ensure_clients()
+            except Exception:
+                # se falhar, retorna somente os IDs explícitos
+                return list(dict.fromkeys([i for i in self.sheet_ids if i]))
+
+            try:
+                page_token: Optional[str] = None
+                while True:
+                    resp = (
+                        self._drive.files()
+                        .list(
+                            q=(
+                                f"'{self.sheet_folder_id}' in parents and trashed=false and "
+                                "(mimeType='application/vnd.google-apps.spreadsheet' or "
+                                " mimeType='application/vnd.google-apps.shortcut')"
+                            ),
+                            fields=(
+                                "nextPageToken, files(id, name, mimeType, "
+                                "shortcutDetails(targetId, targetMimeType))"
+                            ),
+                            pageToken=page_token,
+                            includeItemsFromAllDrives=True,
+                            supportsAllDrives=True,
+                            corpora="allDrives",
+                            spaces="drive",
+                        )
+                        .execute()
+                    )
+
+                    for f in resp.get("files", []):
+                        mt = f.get("mimeType")
+                        if mt == "application/vnd.google-apps.spreadsheet":
+                            ids.append(f.get("id"))
+                        elif mt == "application/vnd.google-apps.shortcut":
+                            sd = f.get("shortcutDetails", {}) or {}
+                            if sd.get("targetMimeType") == "application/vnd.google-apps.spreadsheet":
+                                ids.append(sd.get("targetId"))
+
+                    page_token = resp.get("nextPageToken")
+                    if not page_token:
+                        break
+            except Exception as e:
+                self._last_errors.append(f"Drive listing error: {e}")
+
+        # adiciona IDs explícitos e remove vazios/duplicados
+        for x in self.sheet_ids:
+            if x and x not in ids:
+                ids.append(x)
+
+        ids = [i for i in ids if i]
+        return list(dict.fromkeys(ids))
+
+    # -------------------- Carregamento --------------------
+
+    def load_all(self) -> Tuple[int, int]:
+        """
+        Carrega todas as planilhas e abas configuradas.
+        Retorna (n_planilhas_lidas, n_linhas_total).
+        """
+        self._ensure_clients()
+
+        prev_cache = self._cache
+        new_cache: Dict[str, pd.DataFrame] = {}
+        total_rows = 0
+        loaded = 0
+
+        try:
+            sheet_ids_to_load = self._resolve_sheet_ids()
+
+            for sheet_id in sheet_ids_to_load:
+                try:
+                    # 1) metadados para listar abas
+                    meta = (
+                        self._sheets.spreadsheets()
+                        .get(spreadsheetId=sheet_id)
+                        .execute()
+                    )
+                    sheets = meta.get("sheets", [])
+                    any_loaded = False
+
+                    for sh in sheets:
+                        ws_title = sh["properties"]["title"]
+                        try:
+                            # 2) lê valores da aba no range configurado
+                            rng = f"{ws_title}!{self.sheet_range}"
+                            resp = (
+                                self._sheets.spreadsheets()
+                                .values()
+                                .get(spreadsheetId=sheet_id, range=rng)
+                                .execute()
+                            )
+                            values = resp.get("values", [])
+
+                            if not values:
+                                df = pd.DataFrame()
+                            else:
+                                header = values[0]
+                                rows = values[1:] if len(values) > 1 else []
+                                if all(isinstance(h, str) and len(h) <= 60 for h in header):
+                                    df = pd.DataFrame(rows, columns=header).fillna("")
+                                else:
+                                    df = pd.DataFrame(values).fillna("")
+
+                            if not df.empty:
+                                df["_ws_title"] = ws_title
+
+                            key = f"{sheet_id}::{ws_title}"
+                            new_cache[key] = df
+                            total_rows += len(df)
+                            any_loaded = True
+
+                        except Exception as e:
+                            self._last_errors.append(
+                                f"Worksheet read error ({sheet_id}/{ws_title}): {e}"
+                            )
+                            continue
+
+                    if any_loaded:
+                        loaded += 1
+
+                except Exception as e:
+                    self._last_errors.append(f"Spreadsheet open error ({sheet_id}): {e}")
                     continue
-                rng = f"{title}!{sheet_range}" if "!" not in sheet_range else sheet_range
-                resp = sheets.spreadsheets().values().get(spreadsheetId=sid, range=rng).execute()
-                values = resp.get("values", [])
-                if len(values) < 2:
-                    continue
-                header, data = values[0], values[1:]
-                df = pd.DataFrame(data, columns=header).fillna("")
-                df = _rename_and_standardize(df)
-                if df.empty:
-                    continue
-                df["sheet_id"] = sid
-                df["aba"] = title
-                frames.append(df)
-                all_sources.append({
-                    "sheet_id": sid,
-                    "worksheet": title,
-                    "rows": int(len(df)),
-                    "type": "google_sheet",
-                })
+
+            self._cache = new_cache
+            return loaded, total_rows
+
+        except Exception as e:
+            self._cache = prev_cache
+            self._last_errors.append(f"Unexpected load error: {e}")
+            raise
+
+    # -------------------- Status / Diagnóstico --------------------
+
+    def _has_any_credentials(self) -> bool:
+        try:
+            _ = get_google_service_account_credentials()
+            return True
         except Exception:
-            continue
+            return False
 
-    # 4) Arquivos CSV/Excel: baixar e ler
-    for src in [s for s in all_sources if s.get("type") == "file"]:
-        fid = src.get("file_id")
-        name = src.get("file_name") or ""
-        mt = src.get("mimeType") or ""
+    def is_configured(self) -> bool:
+        return self._has_any_credentials() and (
+            bool(self.sheet_folder_id) or bool(self.sheet_ids)
+        )
+
+    def status(self) -> Dict[str, Any]:
         try:
-            data_bytes = _download_drive_file(drive, fid)
-            if mt == "text/csv" or name.lower().endswith(".csv"):
-                # Tentar detectar delimitador e decimal
-                text = data_bytes.decode("utf-8-sig", errors="ignore")
-                # heurística simples: ; mais comum no BR
-                sep = ";" if text.count(";") >= text.count(",") else ","
-                df = pd.read_csv(io.StringIO(text), sep=sep)
-            elif name.lower().endswith(".xlsx") or name.lower().endswith(".xls") or "spreadsheetml.sheet" in mt or "ms-excel" in mt:
-                df = pd.read_excel(io.BytesIO(data_bytes))
-            else:
-                continue
-            df = _rename_and_standardize(df)
+            resolved_ids = self._resolve_sheet_ids()
+        except Exception:
+            resolved_ids = self.sheet_ids
+
+        return {
+            "configured": self.is_configured(),
+            "sheets_folder_id": self.sheet_folder_id,
+            "sheets_count": len(resolved_ids),
+            "worksheets_count": len(self._cache),
+            "resolved_sheet_ids": resolved_ids,
+            "loaded": {k: len(v) for k, v in self._cache.items()},
+            "debug": {
+                "auth_source": self._auth_source,
+                "last_errors": self._last_errors[-8:],
+            },
+        }
+
+    # -------------------- Busca simples --------------------
+
+    def search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        if not query or not self._cache:
+            return []
+
+        q = str(query).strip().lower()
+        matches: List[Dict[str, Any]] = []
+
+        for key, df in self._cache.items():
             if df.empty:
                 continue
-            df["sheet_id"] = fid
-            df["aba"] = name
-            frames.append(df)
-            src.update({"rows": int(len(df))})
-        except Exception:
-            continue
+            concat_series = df.astype(str).apply(
+                lambda r: " | ".join(r.values.tolist()), axis=1
+            ).str.lower()
 
-    if not frames:
-        return pd.DataFrame(columns=[
-            "Data","ID_Transacao","Produto","Categoria","Regiao","Quantidade","Preco_Unitario","Receita_Total","sheet_id","aba"
-        ]), all_sources
+            idx = concat_series[concat_series.str.contains(q, na=False)].index
+            for i in idx[:top_k]:
+                row = df.iloc[i].to_dict()
+                sheet_id, ws_title = (key.split("::", 1) + [""])[:2]
+                row["_sheet_id"] = sheet_id
+                row["_worksheet"] = ws_title
+                matches.append(row)
 
-    out = pd.concat(frames, ignore_index=True)
-    # Remover duplicatas em um conjunto de chaves comuns, se existirem
-    keys = [c for c in ("ID_Transacao", "Produto", "Data") if c in out.columns]
-    if keys:
-        out = out.drop_duplicates(subset=keys)
-    # Ordena por Data (se existir)
-    if "Data" in out.columns:
-        out = out.sort_values(by=["Data"])  # type: ignore[arg-type]
-    out = out.reset_index(drop=True)
-    return out, all_sources
+        return matches[:top_k]
 
+    def build_context_snippet(self, rows: List[Dict[str, Any]]) -> str:
+        if not rows:
+            return ""
+        lines = []
+        for r in rows:
+            sheet = r.pop("_sheet_id", "")
+            ws = r.pop("_worksheet", "")
+            kv = ", ".join([f"{k}: {v}" for k, v in r.items() if str(v).strip()])
+            label = f"[sheet {sheet} / aba {ws}]" if ws else f"[sheet {sheet}]"
+            lines.append(f"{label} {kv}")
+        return "\n".join(lines)
 
-# Compat: funções antigas (mantidas para referência externa se houver)
-def collect_sheet_ids(folder_id: str | None, extra_ids: List[str]) -> List[str]:
-    drive, _ = get_google_apis_services()
-    ids: List[str] = []
-    if folder_id:
-        for f in _list_drive_files(drive, folder_id):
-            mt = f.get("mimeType")
-            if mt == "application/vnd.google-apps.spreadsheet":
-                ids.append(f.get("id"))
-            elif mt == "application/vnd.google-apps.shortcut":
-                sd = (f.get("shortcutDetails") or {})
-                if sd.get("targetMimeType") == "application/vnd.google-apps.spreadsheet":
-                    ids.append(sd.get("targetId"))
-    for x in (extra_ids or []):
-        if x not in ids:
-            ids.append(x)
-    return ids
+    # -------------------- Busca avançada --------------------
 
+    def _extract_ids(self, text: str) -> List[str]:
+        patterns = [r"\b[A-Z]-\d{6}-\d{3,6}\b", r"\b[A-Z]-\d{4}-\d{3,6}\b"]
+        found: List[str] = []
+        for pat in patterns:
+            found += re.findall(pat, text)
+        return list(dict.fromkeys(found))
 
-def load_raw_rows(sheet_ids: List[str], sheet_range: str, year: Optional[int], months: List[int]) -> pd.DataFrame:
-    """Versão simplificada usando Sheets API (deprecatada em favor de load_sales_data_drive_folder)."""
-    _, sheets = get_google_apis_services()
-    frames: List[pd.DataFrame] = []
-    for sid in sheet_ids:
+    def _extract_month_year(self, text: str) -> Optional[Tuple[str, str]]:
+        months = {
+            "janeiro": "01",
+            "fevereiro": "02",
+            "março": "03",
+            "marco": "03",
+            "abril": "04",
+            "maio": "05",
+            "junho": "06",
+            "julho": "07",
+            "agosto": "08",
+            "setembro": "09",
+            "outubro": "10",
+            "novembro": "11",
+            "dezembro": "12",
+        }
+        t = text.lower()
+        year = None
+        mnum = None
+        for name, num in months.items():
+            if name in t:
+                mnum = num
+                break
+        ymatch = re.search(r"\b(20\d{2})\b", t)
+        if ymatch:
+            year = ymatch.group(1)
+        if mnum and year:
+            return year, mnum
+        return None
+
+    def infer_year_for_month(self, month_num: str) -> Optional[str]:
+        pat = re.compile(r"_(20\d{2})_" + re.escape(month_num) + r"_")
+        for key in self._cache.keys():
+            m = pat.search(key)
+            if m:
+                return m.group(1)
+
+        years = set()
+        year_pat = re.compile(r"_(20\d{2})_")
+        for key in self._cache.keys():
+            m = year_pat.search(key)
+            if m:
+                years.add(m.group(1))
+        if len(years) == 1:
+            return next(iter(years))
+        return "2024"
+
+    def parse_month_year(self, text: str) -> Optional[Tuple[str, str]]:
+        ym = self._extract_month_year(text)
+        if ym:
+            return ym
+        months = {
+            "janeiro": "01",
+            "fevereiro": "02",
+            "março": "03",
+            "marco": "03",
+            "abril": "04",
+            "maio": "05",
+            "junho": "06",
+            "julho": "07",
+            "agosto": "08",
+            "setembro": "09",
+            "outubro": "10",
+            "novembro": "11",
+            "dezembro": "12",
+        }
+        t = text.lower()
+        for name, num in months.items():
+            if name in t:
+                year = self.infer_year_for_month(num)
+                if year:
+                    return year, num
+        return None
+
+    def search_advanced(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        if not query or not self._cache:
+            return []
+
+        ids = self._extract_ids(query)
+        ym = self._extract_month_year(query)
+
+        filtered_keys = list(self._cache.keys())
+        if ym:
+            year, month = ym
+            token = f"_{year}_{month}_"
+            filtered_keys = [
+                k for k in filtered_keys
+                if token in k or token in str(self._cache[k].get("_ws_title", ""))
+            ]
+
+        results: List[Dict[str, Any]] = []
+
+        # 1) match por IDs
+        if ids:
+            for key in filtered_keys:
+                df = self._cache[key]
+                if df.empty:
+                    continue
+                for idv in ids:
+                    id_cols = [c for c in df.columns if "id" in str(c).lower()]
+                    matched = pd.DataFrame()
+                    for col in id_cols:
+                        try:
+                            matched = pd.concat([matched, df[df[col].astype(str) == idv]])
+                        except Exception:
+                            continue
+                    if matched.empty:
+                        concat_series = df.astype(str).apply(
+                            lambda r: " | ".join(r.values.tolist()), axis=1
+                        ).str.lower()
+                        idx = concat_series[concat_series.str.contains(idv.lower(), na=False)].index
+                        if len(idx) > 0:
+                            matched = df.loc[idx]
+
+                    for _, row in matched.head(top_k).iterrows():
+                        rec = row.to_dict()
+                        sheet_id, ws_title = (key.split("::", 1) + [""])[:2]
+                        rec["_sheet_id"] = sheet_id
+                        rec["_worksheet"] = ws_title
+                        results.append(rec)
+                        if len(results) >= top_k:
+                            return results
+
+        # 2) tokens
+        tokens = [w.strip(".,:;!?()[]{}\"'`").lower() for w in query.split()]
+        tokens = [t for t in tokens if len(t) >= 4]
+
+        for key in filtered_keys:
+            df = self._cache[key]
+            if df.empty:
+                continue
+            concat_series = df.astype(str).apply(
+                lambda r: " | ".join(r.values.tolist()), axis=1
+            ).str.lower()
+
+            if tokens:
+                mask = pd.Series(True, index=concat_series.index)
+                for t in tokens[:5]:
+                    mask = mask & concat_series.str.contains(t, na=False)
+                idx = concat_series[mask].index
+            else:
+                idx = []
+
+            for i in idx[:top_k]:
+                row = df.iloc[i].to_dict()
+                sheet_id, ws_title = (key.split("::", 1) + [""])[:2]
+                row["_sheet_id"] = sheet_id
+                row["_worksheet"] = ws_title
+                results.append(row)
+                if len(results) >= top_k:
+                    return results
+
+        return results[:top_k]
+
+    # -------------------- Agregações determinísticas --------------------
+
+    @staticmethod
+    def _parse_number_br(value: Any) -> float:
+        if value is None:
+            return 0.0
+        s = str(value).strip()
+        if not s:
+            return 0.0
+        s = s.replace(".", "").replace(",", ".")
         try:
-            for title in _sheet_titles(sheets, sid):
-                if _should_ignore_tab(title):
-                    continue
-                rng = f"{title}!{sheet_range}" if "!" not in sheet_range else sheet_range
-                resp = sheets.spreadsheets().values().get(spreadsheetId=sid, range=rng).execute()
-                values = resp.get("values", [])
-                if len(values) < 2:
-                    continue
-                header, data = values[0], values[1:]
-                df = pd.DataFrame(data, columns=header).fillna("")
-                df = _rename_and_standardize(df)
-                if df.empty:
-                    continue
-                # filtros opcionais por ano/mes, se houver coluna Data
-                if year or months:
-                    if "Data" in df.columns:
-                        dt = pd.to_datetime(df["Data"], errors="coerce", dayfirst=True)
-                        if year:
-                            df = df[dt.dt.year == year]
-                        if months:
-                            df = df[dt.dt.month.isin(months)]
-                if df.empty:
-                    continue
-                df["sheet_id"], df["aba"] = sid, title
-                frames.append(df)
+            return float(s)
         except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame(columns=["Data","ID_Transacao","Produto","Categoria","Regiao","Quantidade","Preco_Unitario","Receita_Total","sheet_id","aba"])
-    out = pd.concat(frames, ignore_index=True)
-    return out.reset_index(drop=True)
+            try:
+                import re as _re
+                return float(_re.sub(r"[^0-9\.-]", "", s))
+            except Exception:
+                return 0.0
 
+    def month_token(self, year: str, month_num: str) -> str:
+        return f"_{year}_{month_num}_"
+
+    def get_month_dataframe(self, year: str, month_num: str) -> pd.DataFrame:
+        token = self.month_token(year, month_num)
+        frames = []
+        for key, df in self._cache.items():
+            if token in key or token in str(df.get("_ws_title", "")):
+                if not df.empty:
+                    frames.append(df.copy())
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True)
+
+    def top_products(self, month_name_or_num: str, year: str, top_n: int = 3) -> Dict[str, Any]:
+        months = {
+            "01": "janeiro", "02": "fevereiro", "03": "março", "04": "abril", "05": "maio", "06": "junho",
+            "07": "julho", "08": "agosto", "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro"
+        }
+        inv = {v: k for k, v in months.items()}
+        m = month_name_or_num.strip().lower()
+        if m in inv:
+            month_num = inv[m]
+        elif re.fullmatch(r"\d{1,2}", m):
+            month_num = m.zfill(2)
+        else:
+            month_num = None
+            for name, num in inv.items():
+                if name in m:
+                    month_num = num
+                    break
+            if month_num is None:
+                return {"found": False, "reason": "Mês inválido"}
+
+        df = self.get_month_dataframe(year, month_num)
+        if df.empty or "Produto" not in df.columns:
+            return {"found": False, "reason": "Sem dados para o mês/ano informado"}
+
+        q = pd.to_numeric(df.get("Quantidade", 0), errors="coerce").fillna(0).astype(float)
+        r = (
+            df.get("Receita_Total", 0).apply(self._parse_number_br)
+            if "Receita_Total" in df.columns
+            else pd.Series([0] * len(df))
+        )
+        tmp = pd.DataFrame({"Produto": df["Produto"], "Quantidade": q, "Receita_Total": r})
+
+        by_qty = (
+            tmp.groupby("Produto", as_index=False)["Quantidade"]
+            .sum()
+            .sort_values(by="Quantidade", ascending=False)
+            .head(top_n)
+        )
+        by_rev = (
+            tmp.groupby("Produto", as_index=False)["Receita_Total"]
+            .sum()
+            .sort_values(by="Receita_Total", ascending=False)
+            .head(top_n)
+        )
+
+        return {
+            "found": True,
+            "year": year,
+            "month": months.get(month_num, month_num),
+            "top_n": top_n,
+            "by_quantity": by_qty.to_dict(orient="records"),
+            "by_revenue": by_rev.to_dict(orient="records"),
+        }
+
+    # -------------------- Agregações globais --------------------
+
+    def _detect_month_tokens(self) -> List[Tuple[str, str]]:
+        pat = re.compile(r"_(20\d{2})_(\d{2})_")
+        found: List[Tuple[str, str]] = []
+        for key, df in self._cache.items():
+            m = pat.search(key)
+            if m:
+                found.append((m.group(1), m.group(2)))
+                continue
+            title = str(df.get("_ws_title", ""))
+            m2 = pat.search(title)
+            if m2:
+                found.append((m2.group(1), m2.group(2)))
+        unique = list(dict.fromkeys(found))
+        unique.sort()
+        return unique
+
+    def top_products_by_month_all(self, top_n: int = 3) -> Dict[str, Any]:
+        months_names = {
+            "01": "janeiro", "02": "fevereiro", "03": "março", "04": "abril", "05": "maio", "06": "junho",
+            "07": "julho", "08": "agosto", "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro"
+        }
+        tokens = self._detect_month_tokens()
+        results: List[Dict[str, Any]] = []
+        for year, month_num in tokens:
+            df = self.get_month_dataframe(year, month_num)
+            if df.empty or "Produto" not in df.columns:
+                continue
+            q = pd.to_numeric(df.get("Quantidade", 0), errors="coerce").fillna(0).astype(float)
+            tmp = pd.DataFrame({"Produto": df["Produto"], "Quantidade": q})
+            by_qty = (
+                tmp.groupby("Produto", as_index=False)["Quantidade"]
+                .sum()
+                .sort_values(by="Quantidade", ascending=False)
+                .head(top_n)
+            )
+            results.append({
+                "year": year,
+                "month": months_names.get(month_num, month_num),
+                "top_n": top_n,
+                "by_quantity": by_qty.to_dict(orient="records"),
+            })
+        return {"found": bool(results), "months": results, "top_n": top_n}
+
+    def _top_products_by_month_via_date(self, top_n: int = 3) -> Dict[str, Any]:
+        months_names = {
+            1: "janeiro", 2: "fevereiro", 3: "março", 4: "abril", 5: "maio", 6: "junho",
+            7: "julho", 8: "agosto", 9: "setembro", 10: "outubro", 11: "novembro", 12: "dezembro"
+        }
+        frames = [df for df in self._cache.values() if not df.empty and "Produto" in df.columns]
+        if not frames:
+            return {"found": False}
+        all_df = pd.concat(frames, ignore_index=True)
+        if "Data" not in all_df.columns:
+            return {"found": False}
+        dt = pd.to_datetime(all_df["Data"], errors="coerce", dayfirst=True, infer_datetime_format=True)
+        qty = pd.to_numeric(all_df.get("Quantidade", 0), errors="coerce").fillna(0).astype(float)
+        safe = pd.DataFrame({"Produto": all_df.get("Produto"), "Quantidade": qty, "ano": dt.dt.year, "mes": dt.dt.month})
+        safe = safe.dropna(subset=["ano", "mes"])
+        if safe.empty:
+            return {"found": False}
+        results: List[Dict[str, Any]] = []
+        for (year, month), grp in safe.groupby(["ano", "mes"]):
+            by_qty = (
+                grp.groupby("Produto", as_index=False)["Quantidade"]
+                .sum()
+                .sort_values(by="Quantidade", ascending=False)
+                .head(top_n)
+            )
+            results.append({
+                "year": int(year),
+                "month": months_names.get(int(month), str(month)).lower(),
+                "top_n": top_n,
+                "by_quantity": by_qty.to_dict(orient="records"),
+            })
+        results.sort(key=lambda x: (x["year"], x["month"]))
+        return {"found": bool(results), "months": results, "top_n": top_n}
+
+    # -------------------- Preview / resumo --------------------
+
+    def schema_preview(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for key, df in self._cache.items():
+            sheet_id, ws_title = (key.split("::", 1) + [""])[:2] if "::" in key else (key, "")
+            out.append({
+                "key": key,
+                "sheet_id": sheet_id,
+                "worksheet": ws_title,
+                "rows": int(len(df)),
+                "columns": list(df.columns),
+            })
+        return out
+
+    def base_summary(self, top_n: int = 3) -> Dict[str, Any]:
+        status = self.status()
+        loaded_map = status.get("loaded", {}) or {}
+        total_rows = sum(int(v) for v in loaded_map.values()) if loaded_map else 0
+        schema = self.schema_preview()
+        res = self.top_products_by_month_all(top_n=top_n)
+        if not res.get("found"):
+            res = self._top_products_by_month_via_date(top_n=top_n)
+        return {
+            "found": True,
+            "totals": {"worksheets": len(loaded_map), "rows": total_rows},
+            "schema": schema,
+            "top_by_month": res if res.get("found") else {"found": False},
+        }
