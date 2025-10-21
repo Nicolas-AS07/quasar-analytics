@@ -9,11 +9,9 @@ from dotenv import load_dotenv
 from abacus_client import AbacusClient
 from sheets_loader import SheetsLoader
 from app.config import (
-    get_google_service_account_credentials,
-    get_google_apis_services,
-    get_sheets_folder_id,
-    get_sheets_ids,
-    get_sheet_range,
+    get_abacus_api_key,
+    get_model_name,
+    get_service_account_email,
 )
 from ui_styles import render_css
 import json
@@ -41,7 +39,7 @@ render_css("dark")
 def get_env_config():
     """Lê API key e modelo via config central (Cloud-first)."""
     api_key = get_abacus_api_key() or ""
-    model = get_model_name("gemini-2.5-pro")
+    model = get_model_name(default="gemini-2.5-pro")
     return api_key, model
 
 

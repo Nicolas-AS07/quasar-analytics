@@ -6,7 +6,6 @@ import re
 import pandas as pd
 import gspread
 from googleapiclient.discovery import build
-from config_utils import get_credentials, get_sheet_range, get_folder_id, get_explicit_sheet_ids
 from app.config import (
     get_google_service_account_credentials,
     get_google_apis_services,
@@ -30,10 +29,10 @@ class SheetsLoader:
                  creds_path: Optional[str] = None,
                  sheet_ids: Optional[List[str]] = None,
                  sheet_range: str = "A:Z") -> None:
-        # Mantém compat com assinatura, mas delega leitura a utils
+        # Mantém compat com assinatura, mas delega leitura a app.config
         self.creds_path = (creds_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()).strip("\"'")
-        self.sheet_ids = sheet_ids or get_explicit_sheet_ids()
-        self.sheet_folder_id: str = get_folder_id() or ""
+        self.sheet_ids = sheet_ids or get_sheets_ids()
+        self.sheet_folder_id: str = get_sheets_folder_id() or ""
         self.sheet_range = get_sheet_range(sheet_range)
 
         self._gc = None
@@ -44,11 +43,10 @@ class SheetsLoader:
         self._last_errors: List[str] = []
 
     def _auth(self):
-        """Autentica usando utilitário central (env ou secrets)."""
+        """Autentica usando app.config (Cloud-first)."""
         try:
-            creds = get_credentials()
-            # Não sabemos a fonte aqui; deixamos um marcador genérico
-            self._auth_source = self._auth_source or "utils:get_credentials"
+            creds = get_google_service_account_credentials()
+            self._auth_source = "app.config:get_google_service_account_credentials"
         except Exception as e:
             self._last_errors.append(f"Credentials error: {e}")
             raise
@@ -173,10 +171,9 @@ class SheetsLoader:
             raise
 
     def _has_any_credentials(self) -> bool:
-        """Verifica se há credenciais disponíveis via env, secrets ou arquivo."""
-        # Se conseguir criar credenciais, está configurado
+        """Verifica se há credenciais disponíveis via app.config."""
         try:
-            _ = get_credentials()
+            _ = get_google_service_account_credentials()
             return True
         except Exception:
             return False
