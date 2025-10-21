@@ -1,0 +1,34 @@
+# Arquivo de configuração com API key
+config.json
+
+# Segredos locais
+.env
+Keys/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Arquivos temporários
+*.tmp
+*.temp
