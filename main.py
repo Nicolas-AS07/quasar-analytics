@@ -230,7 +230,7 @@ def main() -> None:
             except Exception as diag_e:
                 diag_status = {"configured": False, "debug": {"exception": str(diag_e)}}
 
-            def presence_snapshot() -> Dict[str, bool]:
+            def presence_snapshot() -> dict[str, bool]:
                 """Retorna quais chaves estão presentes em secrets/env (sem vazar valores)."""
                 keys = {
                     "google_service_account (secrets)": False,
