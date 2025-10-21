@@ -128,7 +128,15 @@ class SheetsLoader:
             page_token: Optional[str] = None
             try:
                 while True:
-                    resp = self._drive.files().list(q=q, fields="nextPageToken, files(id, name, mimeType)", pageToken=page_token).execute()
+                    resp = self._drive.files().list(
+                        q=q,
+                        fields="nextPageToken, files(id, name, mimeType, parents)",
+                        pageToken=page_token,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        corpora="allDrives",
+                        spaces="drive",
+                    ).execute()
                     for f in resp.get("files", []):
                         fid = f.get("id")
                         if fid:
