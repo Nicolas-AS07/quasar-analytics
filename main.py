@@ -2,6 +2,7 @@
 Quasar Analytics - Assistente Analítico de Vendas
 Chatbot com IA para análise de dados de vendas via Google Sheets
 """
+
 import os
 import json
 import time
@@ -29,8 +30,10 @@ from abacus_client import AbacusClient
 # -------------------------------------------------------
 # Boot
 # -------------------------------------------------------
+# Carrega as variáveis de ambiente do arquivo .env, caso exista.
 load_dotenv()
 
+# Configuração da página do Streamlit
 st.set_page_config(
     page_title="Quasar Analytics",
     page_icon="📊",
@@ -38,6 +41,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Aplica estilo customizado (tema dark) carregado via ui_styles
 render_css("dark")
 
 
@@ -45,7 +49,7 @@ render_css("dark")
 # Helpers
 # -------------------------------------------------------
 def get_env_config() -> tuple[str, str]:
-    """Lê API key e modelo via config central (st.secrets/.env)."""
+    """Lê API key e modelo via config central (st.secrets ou .env)."""
     api_key = get_abacus_api_key() or ""
     model = get_model_name(default="gemini-2.5-pro")
     return api_key, model
@@ -55,7 +59,7 @@ def create_client(api_key: str, model: str = "gemini-2.5-pro") -> AbacusClient |
     """Cria o cliente do modelo com tratamento de erro."""
     try:
         client = AbacusClient(api_key=api_key, model=model)
-        # validação opcional (se seu AbacusClient não tiver este método, ignora)
+        # Validação opcional se a biblioteca oferecer esse método
         try:
             if hasattr(client, "validate_connection") and not client.validate_connection():
                 st.warning("Não foi possível validar a conexão com o modelo.")
@@ -68,21 +72,21 @@ def create_client(api_key: str, model: str = "gemini-2.5-pro") -> AbacusClient |
 
 
 def display_chat_messages() -> None:
-    """Renderiza o histórico do chat."""
-    for m in st.session_state.messages:
-        role = "user" if m.get("role") == "user" else "assistant"
+    """Renderiza o histórico de mensagens do chat na interface."""
+    for message in st.session_state.messages:
+        role = "user" if message.get("role") == "user" else "assistant"
         with st.chat_message(role):
-            st.markdown(m.get("content", ""))
+            st.markdown(message.get("content", ""))
 
 
 def initialize_session() -> None:
     """Inicializa variáveis de sessão e carrega planilhas com TTL."""
-    # estado básico
+    # Estado básico
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("client", None)
     st.session_state.setdefault("sheets", None)
 
-    # API key/modelo
+    # API key e modelo
     if "api_key" not in st.session_state or "model" not in st.session_state:
         api_key, model = get_env_config()
         st.session_state.api_key = api_key
@@ -91,11 +95,14 @@ def initialize_session() -> None:
             st.session_state.client = create_client(api_key, model)
 
     # TTL de recarga
+    # Definições padrão de TTL, que serão usadas pelo widget se o valor não existir ainda
     st.session_state.setdefault("sheets_ttl_enabled", False)
     st.session_state.setdefault("sheets_ttl_seconds", 60)
-    last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
 
-    loader = st.session_state.get("sheets") or SheetsLoader()
+    last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
+    loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
+
+    # Determina se deve recarregar com base no TTL
     should_reload = True
     if st.session_state["sheets_ttl_enabled"] and last_loaded_ts:
         try:
@@ -105,6 +112,7 @@ def initialize_session() -> None:
         except Exception:
             should_reload = True
 
+    # Carrega planilhas se configurado e se precisa recarregar
     if loader.is_configured():
         try:
             if should_reload:
@@ -114,10 +122,11 @@ def initialize_session() -> None:
                 st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.session_state.sheets_last_loaded_ts = time.time()
             else:
+                # Se não recarrega, mantém o loader atual
                 st.session_state.sheets = loader
                 st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
         except Exception as e:
-            # mantém cache anterior se existir
+            # Em caso de falha no carregamento, mantém o loader anterior
             st.session_state.sheets = st.session_state.get("sheets")
             st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
             st.warning(f"Falha ao carregar planilhas (mantendo cache anterior): {e}")
@@ -127,22 +136,25 @@ def initialize_session() -> None:
 
 
 # -------------------------------------------------------
-# App
+# App principal
 # -------------------------------------------------------
 def main() -> None:
+    # Inicializa sessão e possivelmente recarrega dados
     initialize_session()
 
-    # ---------------- Sidebar: status e diagnóstico ----------------
+    # ---------------------------------------------------
+    # Barra lateral: status, TTL e diagnósticos
+    # ---------------------------------------------------
     with st.sidebar:
         st.markdown("### 📚 Dados carregados")
 
+        loader: SheetsLoader | None = st.session_state.get("sheets")
         rows_total = 0
         worksheets_count = 0
         sheets_count = 0
         last_loaded = st.session_state.get("sheets_last_loaded")
         last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
 
-        loader = st.session_state.get("sheets")
         if loader:
             try:
                 status = loader.status()
@@ -159,6 +171,7 @@ def main() -> None:
             st.caption(f"Última atualização: {last_loaded}")
         st.divider()
 
+        # Instruções sobre a Service Account
         sa_email = get_service_account_email()
         if sa_email:
             st.info(
@@ -168,35 +181,35 @@ def main() -> None:
             )
         else:
             st.info(
-                "Defina os segredos da Service Account no Streamlit (chave `google_service_account` no secrets).",
+                "Defina os segredos da Service Account no Streamlit (chave `google_service_account`).",
                 icon="ℹ️",
             )
 
-        # TTL controls
+        # Controles de TTL
         st.markdown("#### ⚙️ Recarga automática (TTL)")
         st.checkbox(
             "Habilitar recarga automática",
-            value=st.session_state["sheets_ttl_enabled"],
             key="sheets_ttl_enabled",
         )
         st.number_input(
             "TTL (segundos)",
             min_value=10,
             max_value=3600,
-            value=int(st.session_state["sheets_ttl_seconds"]),
             step=10,
             key="sheets_ttl_seconds",
         )
+        # Mostra tempo estimado para a próxima recarga
         if st.session_state["sheets_ttl_enabled"] and last_loaded_ts:
             try:
-                eta = max(0, int(int(st.session_state["sheets_ttl_seconds"]) - (time.time() - float(last_loaded_ts))))
+                ttl_secs = int(st.session_state.get("sheets_ttl_seconds", 60))
+                eta = max(0, ttl_secs - int(time.time() - float(last_loaded_ts)))
                 st.caption(f"Próxima recarga automática em ~{eta}s")
             except Exception:
                 pass
 
         st.divider()
 
-        # Recarregar manualmente
+        # Botão para recarregar planilhas manualmente
         if loader and st.button("Recarregar planilhas agora"):
             try:
                 n_sheets, n_rows = loader.load_all()
@@ -210,14 +223,15 @@ def main() -> None:
 
         st.divider()
 
-        # Diagnóstico
+        # Diagnóstico detalhado
         with st.expander("Diagnóstico (detalhes)"):
             try:
-                _status = loader.status() if loader else SheetsLoader().status()
-            except Exception as _e:
-                _status = {"configured": False, "debug": {"exception": str(_e)}}
+                diag_status = loader.status() if loader else SheetsLoader().status()
+            except Exception as diag_e:
+                diag_status = {"configured": False, "debug": {"exception": str(diag_e)}}
 
-            def presence():
+            def presence_snapshot() -> Dict[str, bool]:
+                """Retorna quais chaves estão presentes em secrets/env (sem vazar valores)."""
                 keys = {
                     "google_service_account (secrets)": False,
                     "SHEETS_FOLDER_ID": False,
@@ -239,7 +253,7 @@ def main() -> None:
                         keys["ABACUS_API_KEY"] = True
                 except Exception:
                     pass
-
+                # Verifica env vars
                 env = os.environ
                 if str(env.get("SHEETS_FOLDER_ID", "")).strip():
                     keys["SHEETS_FOLDER_ID"] = True
@@ -253,15 +267,17 @@ def main() -> None:
 
             st.json(
                 {
-                    "configured": _status.get("configured", False),
-                    "sheets_folder_id": _status.get("sheets_folder_id", ""),
-                    "resolved_sheet_ids_preview": (_status.get("resolved_sheet_ids", []) or [])[:5],
-                    "debug": _status.get("debug", {}),
-                    "presence": presence(),
+                    "configured": diag_status.get("configured", False),
+                    "sheets_folder_id": diag_status.get("sheets_folder_id", ""),
+                    "resolved_sheet_ids_preview": (
+                        (diag_status.get("resolved_sheet_ids", []) or [])[:5]
+                    ),
+                    "debug": diag_status.get("debug", {}),
+                    "presence": presence_snapshot(),
                 }
             )
 
-        # Preview de abas
+        # Prévia de abas carregadas
         if loader:
             try:
                 status = loader.status()
@@ -273,9 +289,13 @@ def main() -> None:
                         sheet_id = key.split("::")[0] if "::" in key else "?"
                         ws_title = key.split("::")[1] if "::" in key else key
                         preview.append(
-                            {"Aba": ws_title, "Planilha (ID)": sheet_id, "Linhas": int(cnt)}
+                            {
+                                "Aba": ws_title,
+                                "Planilha (ID)": sheet_id,
+                                "Linhas": int(cnt),
+                            }
                         )
-                    preview = sorted(preview, key=lambda x: x["Linhas"], reverse=True)
+                    preview.sort(key=lambda x: x["Linhas"], reverse=True)
                     st.dataframe(preview, use_container_width=True, hide_index=True)
             except Exception:
                 pass
@@ -283,10 +303,10 @@ def main() -> None:
         # Snapshot JSON do contexto
         if loader:
             try:
-                loader_status = loader.status()
-                loaded_map = loader_status.get("loaded", {}) or {}
+                status = loader.status()
+                loaded_map = status.get("loaded", {}) or {}
                 snapshot = {
-                    "sheets_ids": loader_status.get(
+                    "sheets_ids": status.get(
                         "resolved_sheet_ids", getattr(loader, "sheet_ids", [])
                     ),
                     "worksheets": [
@@ -302,9 +322,7 @@ def main() -> None:
                     ],
                     "totals": {
                         "worksheets": len(loaded_map),
-                        "rows": sum(int(v) for v in loaded_map.values())
-                        if loaded_map
-                        else 0,
+                        "rows": sum(int(v) for v in loaded_map.values()) if loaded_map else 0,
                     },
                     "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
@@ -317,8 +335,11 @@ def main() -> None:
             except Exception:
                 pass
 
-    # ---------------- Landing / Chat ----------------
+    # ---------------------------------------------------
+    # Corpo: Landing page ou Chat
+    # ---------------------------------------------------
     if not st.session_state.messages:
+        # Página inicial sem perguntas
         st.markdown(
             """
             <div class="hero-landing">
@@ -337,26 +358,36 @@ def main() -> None:
         )
         st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
+        # Três botões para perguntas rápidas (landing chips)
+        col1, col2, col3 = st.columns(3)
+        with col1:
             if st.button("🔍 Análise Completa", use_container_width=True, key="chip1"):
                 st.session_state.messages.append(
-                    {"role": "user", "content": "Mostre uma análise de vendas do último mês",
-                     "timestamp": datetime.now().strftime("%H:%M")}
+                    {
+                        "role": "user",
+                        "content": "Mostre uma análise de vendas do último mês",
+                        "timestamp": datetime.now().strftime("%H:%M"),
+                    }
                 )
                 st.rerun()
-        with c2:
+        with col2:
             if st.button("📊 Top Produtos", use_container_width=True, key="chip2"):
                 st.session_state.messages.append(
-                    {"role": "user", "content": "Quais foram os produtos mais vendidos?",
-                     "timestamp": datetime.now().strftime("%H:%M")}
+                    {
+                        "role": "user",
+                        "content": "Quais foram os produtos mais vendidos?",
+                        "timestamp": datetime.now().strftime("%H:%M"),
+                    }
                 )
                 st.rerun()
-        with c3:
+        with col3:
             if st.button("💰 Performance", use_container_width=True, key="chip3"):
                 st.session_state.messages.append(
-                    {"role": "user", "content": "Como está a performance de vendas este ano?",
-                     "timestamp": datetime.now().strftime("%H:%M")}
+                    {
+                        "role": "user",
+                        "content": "Como está a performance de vendas este ano?",
+                        "timestamp": datetime.now().strftime("%H:%M"),
+                    }
                 )
                 st.rerun()
         st.markdown(
@@ -369,37 +400,42 @@ def main() -> None:
             unsafe_allow_html=True,
         )
     else:
+        # Chat em andamento
         st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
         display_chat_messages()
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Campo de chat
+    # Campo de chat para nova pergunta
     user_input = st.chat_input("O que você quer saber?")
     if user_input:
         st.session_state.messages.append(
-            {"role": "user", "content": user_input, "timestamp": datetime.now().strftime("%H:%M")}
+            {
+                "role": "user",
+                "content": user_input,
+                "timestamp": datetime.now().strftime("%H:%M"),
+            }
         )
         st.rerun()
 
-    # Processamento da última mensagem do usuário
+    # Processamento da última mensagem do usuário para gerar resposta
     if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
         last_user_msg = st.session_state.messages[-1]["content"]
-
+        # Placeholder de "digitando..."
         with st.chat_message("assistant"):
             ph = st.empty()
             ph.markdown("_Digitando..._")
 
+        # Histórico de conversa (todas menos a última)
         conversation_history = [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages[:-1]
         ]
 
-        # --- Monta Contexto com base nas planilhas carregadas
+        # Monta contexto baseado nas planilhas
         sheets_ctx = ""
         loader = st.session_state.get("sheets")
-
         if loader:
-            # Base: resumo determinístico
+            # Resumo determinístico
             try:
                 base = loader.base_summary(top_n=3)
                 if base.get("found"):
@@ -409,27 +445,38 @@ def main() -> None:
 
             text_lower = last_user_msg.lower()
 
-            # Top-N por mês (todos ou específico)
-            if (("top" in text_lower or "mais vendido" in text_lower or
-                 "mais vendidos" in text_lower or "top 3" in text_lower)
-                    and ("produto" in text_lower)):
-                # todos os meses
+            # Pergunta sobre top produtos
+            if (
+                ("top" in text_lower or "mais vendido" in text_lower or "mais vendidos" in text_lower or "top 3" in text_lower)
+                and ("produto" in text_lower)
+            ):
+                # Todos os meses / por mês
                 if any(token in text_lower for token in ["todos os meses", "cada mês", "cada mes", "por mês", "por mes"]):
                     res_all = loader.top_products_by_month_all(top_n=3)
                     if res_all.get("found"):
-                        sheets_ctx = (sheets_ctx + "\n\n" +
-                                      "Contexto (dados agregados por mês):\n" +
-                                      json.dumps(res_all, ensure_ascii=False)).strip()
-                # mês específico
+                        sheets_ctx = (
+                            sheets_ctx
+                            + "\n\nContexto (dados agregados por mês):\n"
+                            + json.dumps(res_all, ensure_ascii=False)
+                        ).strip()
+                # Mês específico
                 if not sheets_ctx:
                     ym = loader.parse_month_year(last_user_msg)
                     if ym:
                         year, month_num = ym
                         month_names = {
-                            "01": "janeiro", "02": "fevereiro", "03": "março",
-                            "04": "abril", "05": "maio", "06": "junho",
-                            "07": "julho", "08": "agosto", "09": "setembro",
-                            "10": "outubro", "11": "novembro", "12": "dezembro",
+                            "01": "janeiro",
+                            "02": "fevereiro",
+                            "03": "março",
+                            "04": "abril",
+                            "05": "maio",
+                            "06": "junho",
+                            "07": "julho",
+                            "08": "agosto",
+                            "09": "setembro",
+                            "10": "outubro",
+                            "11": "novembro",
+                            "12": "dezembro",
                         }
                         month_name = month_names.get(month_num, month_num)
                         res = loader.top_products(month_name, year, top_n=3)
@@ -440,23 +487,26 @@ def main() -> None:
                                 "top_por_quantidade": res.get("by_quantity", []),
                                 "top_por_receita": res.get("by_revenue", []),
                             }
-                            sheets_ctx = (sheets_ctx + "\n\n" +
-                                          "Contexto (dados agregados):\n" +
-                                          json.dumps(agg_ctx, ensure_ascii=False)).strip()
+                            sheets_ctx = (
+                                sheets_ctx
+                                + "\n\nContexto (dados agregados):\n"
+                                + json.dumps(agg_ctx, ensure_ascii=False)
+                            ).strip()
 
-            # Busca genérica
+            # Busca genérica quando não há agregação
             if not sheets_ctx:
                 rows = loader.search_advanced(last_user_msg, top_k=5)
                 sheets_ctx = loader.build_context_snippet(rows)
 
-        # Prompt final
+        # Garante que sempre existe a seção Contexto
         final_prompt = (
-            "Contexto (planilhas/agregações):\n" +
-            (sheets_ctx if sheets_ctx else "[sem contexto disponível]") +
-            "\n\nPergunta do usuário: " + last_user_msg
+            "Contexto (planilhas/agregações):\n"
+            + (sheets_ctx if sheets_ctx else "[sem contexto disponível]")
+            + "\n\nPergunta do usuário: "
+            + last_user_msg
         )
 
-        # Chamada ao modelo
+        # Faz chamada ao modelo
         if st.session_state.client:
             try:
                 resp = st.session_state.client.send_message(final_prompt, conversation_history)
@@ -466,17 +516,20 @@ def main() -> None:
         else:
             content = "Não foi possível conectar ao modelo neste momento."
 
+        # Adiciona resposta do assistente e rerun
         st.session_state.messages.append(
-            {"role": "assistant", "content": content, "timestamp": datetime.now().strftime("%H:%M")}
+            {
+                "role": "assistant",
+                "content": content,
+                "timestamp": datetime.now().strftime("%H:%M"),
+            }
         )
         st.rerun()
 
-    # Auto-scroll
+    # Rola para baixo automaticamente quando há mensagens
     if st.session_state.messages:
         st.markdown(
-            """
-            <script>window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});</script>
-            """,
+            "<script>window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});</script>",
             unsafe_allow_html=True,
         )
 
