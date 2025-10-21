@@ -5,8 +5,8 @@ import re
 
 import pandas as pd
 import gspread
-from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from config_utils import get_credentials, get_sheet_range, get_folder_id, get_explicit_sheet_ids
 
 
 class SheetsLoader:
@@ -22,49 +22,11 @@ class SheetsLoader:
                  creds_path: Optional[str] = None,
                  sheet_ids: Optional[List[str]] = None,
                  sheet_range: str = "A:Z") -> None:
-        # Helper para ler de st.secrets se disponível (Cloud) ou env local
-        def _get_secret(key: str) -> Optional[Any]:
-            try:
-                import streamlit as st
-                if key in st.secrets:
-                    return st.secrets[key]
-            except Exception:
-                pass
-            return None
-
-        self.creds_path = (creds_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()).strip()
-        # remover aspas acidentais
-        if (self.creds_path.startswith('"') and self.creds_path.endswith('"')) or (self.creds_path.startswith("'") and self.creds_path.endswith("'")):
-            self.creds_path = self.creds_path[1:-1]
-
-        # SHEETS_IDS: pode vir de env (string) ou de secrets (string ou lista)
-        ids_env = os.getenv("SHEETS_IDS", "").strip()
-        if not ids_env:
-            ids_sec = _get_secret("SHEETS_IDS")
-            if ids_sec is not None:
-                if isinstance(ids_sec, list):
-                    ids_env = ",".join([str(x).strip() for x in ids_sec if str(x).strip()])
-                else:
-                    ids_env = str(ids_sec).strip()
-        self.sheet_ids = sheet_ids or [s.strip() for s in ids_env.split(",") if s.strip()]
-
-        # Pasta do Drive: de env ou secrets
-        folder_env = os.getenv("SHEETS_FOLDER_ID", "").strip()
-        if not folder_env:
-            fsec = _get_secret("SHEETS_FOLDER_ID")
-            if fsec is not None:
-                folder_env = str(fsec).strip()
-        if (folder_env.startswith('"') and folder_env.endswith('"')) or (folder_env.startswith("'") and folder_env.endswith("'")):
-            folder_env = folder_env[1:-1]
-        self.sheet_folder_id: str = folder_env
-
-        # Intervalo padrão
-        range_env = os.getenv("SHEET_RANGE", "").strip()
-        if not range_env:
-            rsec = _get_secret("SHEET_RANGE")
-            if rsec is not None:
-                range_env = str(rsec).strip()
-        self.sheet_range = range_env or sheet_range
+        # Mantém compat com assinatura, mas delega leitura a utils
+        self.creds_path = (creds_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()).strip("\"'")
+        self.sheet_ids = sheet_ids or get_explicit_sheet_ids()
+        self.sheet_folder_id: str = get_folder_id() or ""
+        self.sheet_range = get_sheet_range(sheet_range)
 
         self._gc = None
         self._drive = None
@@ -74,72 +36,15 @@ class SheetsLoader:
         self._last_errors: List[str] = []
 
     def _auth(self):
-        """Autentica usando (prioridade):
-        1) JSON em variável de ambiente GOOGLE_SERVICE_ACCOUNT_JSON
-        2) JSON em st.secrets (GOOGLE_SERVICE_ACCOUNT_JSON ou google_service_account/gcp_service_account)
-        3) Caminho do arquivo em GOOGLE_APPLICATION_CREDENTIALS
-        """
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
-            "https://www.googleapis.com/auth/drive.readonly",
-        ]
+        """Autentica usando utilitário central (env ou secrets)."""
+        try:
+            creds = get_credentials()
+            # Não sabemos a fonte aqui; deixamos um marcador genérico
+            self._auth_source = self._auth_source or "utils:get_credentials"
+        except Exception as e:
+            self._last_errors.append(f"Credentials error: {e}")
+            raise
 
-        # 1) Tentar via variável de ambiente com JSON completo
-        sa_json_env = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-        creds = None
-        if sa_json_env:
-            try:
-                info = json.loads(sa_json_env)
-                creds = Credentials.from_service_account_info(info, scopes=scopes)
-                self._auth_source = "env:GOOGLE_SERVICE_ACCOUNT_JSON"
-            except Exception:
-                creds = None
-                self._last_errors.append("Invalid GOOGLE_SERVICE_ACCOUNT_JSON env value")
-
-        # 2) Tentar via st.secrets (quando em Streamlit Cloud)
-        if creds is None:
-            try:
-                import streamlit as st  # import local para não exigir dependência fora do Streamlit
-                # a) string JSON em secrets
-                if "GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets:
-                    raw = st.secrets["GOOGLE_SERVICE_ACCOUNT_JSON"]
-                    try:
-                        info = json.loads(str(raw)) if not isinstance(raw, dict) else raw
-                        creds = Credentials.from_service_account_info(info, scopes=scopes)
-                        self._auth_source = "secrets:GOOGLE_SERVICE_ACCOUNT_JSON"
-                    except Exception:
-                        self._last_errors.append("Invalid secrets.GOOGLE_SERVICE_ACCOUNT_JSON")
-                # b) dict completo em secrets (google_service_account ou gcp_service_account)
-                if creds is None and "google_service_account" in st.secrets:
-                    raw = st.secrets["google_service_account"]
-                    if isinstance(raw, dict):
-                        try:
-                            creds = Credentials.from_service_account_info(raw, scopes=scopes)
-                            self._auth_source = "secrets:google_service_account"
-                        except Exception:
-                            self._last_errors.append("Invalid secrets.google_service_account dict")
-                if creds is None and "gcp_service_account" in st.secrets:
-                    raw = st.secrets["gcp_service_account"]
-                    if isinstance(raw, dict):
-                        try:
-                            creds = Credentials.from_service_account_info(raw, scopes=scopes)
-                            self._auth_source = "secrets:gcp_service_account"
-                        except Exception:
-                            self._last_errors.append("Invalid secrets.gcp_service_account dict")
-            except Exception:
-                # Streamlit pode não estar disponível (execução CLI/testes)
-                self._last_errors.append("st.secrets unavailable")
-
-        # 3) Fallback: arquivo em caminho local
-        if creds is None:
-            if not self.creds_path or not os.path.isfile(self.creds_path):
-                raise FileNotFoundError(
-                    "Credenciais da Service Account não encontradas. Configure GOOGLE_SERVICE_ACCOUNT_JSON (JSON) ou GOOGLE_APPLICATION_CREDENTIALS (caminho absoluto do arquivo)."
-                )
-            creds = Credentials.from_service_account_file(self.creds_path, scopes=scopes)
-            self._auth_source = f"file:{self.creds_path}"
-
-        # Autorização gspread e cliente Drive
         self._gc = gspread.authorize(creds)
         try:
             self._drive = build('drive', 'v3', credentials=creds, cache_discovery=False)
@@ -161,89 +66,48 @@ class SheetsLoader:
             # Garantir auth
             self._ensure_client()
             if not self._drive:
-                # Se não conseguiu criar cliente Drive, fallback para SHEETS_IDS
                 return self.sheet_ids
             folder_id = self.sheet_folder_id
-            def list_spreadsheets_recursive(root_id: str) -> List[str]:
-                ids: List[str] = []
-                folders_to_visit: List[str] = [root_id]
-                visited: set[str] = set()
-                while folders_to_visit:
-                    current = folders_to_visit.pop(0)
-                    if current in visited:
-                        continue
-                    visited.add(current)
-                    # 1) Planilhas diretamente nesta pasta (inclui atalhos)
-                    try:
-                        page_token: Optional[str] = None
-                        while True:
-                            resp = self._drive.files().list(
-                                q=f"'{current}' in parents and trashed=false and (mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.google-apps.shortcut')",
-                                fields=(
-                                    "nextPageToken, files(id, name, mimeType, parents, "
-                                    "shortcutDetails(targetId, targetMimeType))"
-                                ),
-                                pageToken=page_token,
-                                includeItemsFromAllDrives=True,
-                                supportsAllDrives=True,
-                                corpora="allDrives",
-                                spaces="drive",
-                            ).execute()
-                            for f in resp.get("files", []):
-                                mt = f.get("mimeType")
-                                if mt == "application/vnd.google-apps.spreadsheet":
-                                    fid = f.get("id")
-                                    if fid:
-                                        ids.append(fid)
-                                elif mt == "application/vnd.google-apps.shortcut":
-                                    sd = f.get("shortcutDetails", {}) or {}
-                                    tgt_id = sd.get("targetId")
-                                    tgt_mt = sd.get("targetMimeType")
-                                    if tgt_id and tgt_mt == "application/vnd.google-apps.spreadsheet":
-                                        ids.append(tgt_id)
-                            page_token = resp.get("nextPageToken")
-                            if not page_token:
-                                break
-                    except Exception:
-                        pass
-                    # 2) Subpastas
-                    try:
-                        page_token2: Optional[str] = None
-                        while True:
-                            resp2 = self._drive.files().list(
-                                q=f"'{current}' in parents and trashed=false and mimeType='application/vnd.google-apps.folder'",
-                                fields="nextPageToken, files(id)",
-                                pageToken=page_token2,
-                                includeItemsFromAllDrives=True,
-                                supportsAllDrives=True,
-                                corpora="allDrives",
-                                spaces="drive",
-                            ).execute()
-                            for f2 in resp2.get("files", []):
-                                sfid = f2.get("id")
-                                if sfid:
-                                    folders_to_visit.append(sfid)
-                            page_token2 = resp2.get("nextPageToken")
-                            if not page_token2:
-                                break
-                    except Exception:
-                        pass
-                # Remove duplicados preservando ordem
-                return list(dict.fromkeys(ids))
-
+            # Listagem NÃO recursiva; inclui planilhas e atalhos para planilhas
+            ids: List[str] = []
             try:
-                ids = list_spreadsheets_recursive(folder_id)
-                if not ids:
-                    # Se a pasta estiver vazia ou sem acesso, talvez o ID seja de uma planilha
-                    try:
-                        self._gc.open_by_key(folder_id)
-                        return [folder_id]
-                    except Exception:
-                        self._last_errors.append("Folder ID is not accessible and not a spreadsheet")
+                page_token: Optional[str] = None
+                while True:
+                    resp = self._drive.files().list(
+                        q=(
+                            f"'{folder_id}' in parents and trashed=false and "
+                            "(mimeType='application/vnd.google-apps.spreadsheet' or "
+                            "mimeType='application/vnd.google-apps.shortcut')"
+                        ),
+                        fields=(
+                            "nextPageToken, files(id, name, mimeType, shortcutDetails(targetId, targetMimeType))"
+                        ),
+                        pageToken=page_token,
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        corpora="allDrives",
+                        spaces="drive",
+                    ).execute()
+                    for f in resp.get("files", []):
+                        mt = f.get("mimeType")
+                        if mt == "application/vnd.google-apps.spreadsheet":
+                            ids.append(f.get("id"))
+                        elif mt == "application/vnd.google-apps.shortcut":
+                            sd = f.get("shortcutDetails", {}) or {}
+                            if sd.get("targetMimeType") == "application/vnd.google-apps.spreadsheet":
+                                ids.append(sd.get("targetId"))
+                    page_token = resp.get("nextPageToken")
+                    if not page_token:
+                        break
             except Exception as e:
                 self._last_errors.append(f"Drive listing error: {e}")
-                return self.sheet_ids
-            return ids
+            # adiciona extras
+            for x in self.sheet_ids:
+                if x and x not in ids:
+                    ids.append(x)
+            # remove None e duplicados preservando ordem
+            ids = [i for i in ids if i]
+            return list(dict.fromkeys(ids))
         # Fallback: ids explícitos
         return self.sheet_ids
 
@@ -302,22 +166,12 @@ class SheetsLoader:
 
     def _has_any_credentials(self) -> bool:
         """Verifica se há credenciais disponíveis via env, secrets ou arquivo."""
-        # 1) JSON em env
-        if os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"):
-            return True
-        # 2) st.secrets
+        # Se conseguir criar credenciais, está configurado
         try:
-            import streamlit as st
-            if (
-                ("GOOGLE_SERVICE_ACCOUNT_JSON" in st.secrets) or
-                ("google_service_account" in st.secrets) or
-                ("gcp_service_account" in st.secrets)
-            ):
-                return True
+            _ = get_credentials()
+            return True
         except Exception:
-            pass
-        # 3) Arquivo
-        return bool(self.creds_path and os.path.isfile(self.creds_path))
+            return False
 
     def is_configured(self) -> bool:
         # Considera configurado se houver credenciais e (SHEETS_FOLDER_ID ou SHEETS_IDS)

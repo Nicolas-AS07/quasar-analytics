@@ -58,6 +58,11 @@
    SHEET_RANGE = "A:Z"
    ```
 
+   Como funciona no código:
+   - Em ambiente local, se `GOOGLE_APPLICATION_CREDENTIALS` apontar para o arquivo JSON, ele será usado.
+   - No Streamlit Cloud, usamos `st.secrets` para montar as credenciais via `config_utils.get_credentials()`.
+   - É obrigatório compartilhar a pasta/planilhas com o email da Service Account (`client_email`).
+
    Observações importantes:
    - Compartilhe a pasta/planilhas do Drive com o email da Service Account (client_email) como Viewer.
    - Não suba o arquivo .env nem o JSON ao repositório público.
