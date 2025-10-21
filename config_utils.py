@@ -75,18 +75,45 @@ def _getenv_strip(name: str) -> str:
 def get_sheet_range(default: str = "A:Z") -> str:
     rng = _getenv_strip("SHEET_RANGE")
     if not rng:
+        # raiz
         val = _get_secret("SHEET_RANGE")
         if val is not None:
             rng = str(val).strip()
+        # tabelas alternativas
+        if not rng and _HAS_STREAMLIT and hasattr(st, "secrets"):
+            try:
+                sec = st.secrets
+                if "sheets" in sec and "SHEET_RANGE" in sec["sheets"]:
+                    rng = str(sec["sheets"]["SHEET_RANGE"]).strip()
+                elif "google_sheets" in sec and "SHEET_RANGE" in sec["google_sheets"]:
+                    rng = str(sec["google_sheets"]["SHEET_RANGE"]).strip()
+                # fallback: alguns usuários colocam por engano dentro de [google_service_account]
+                elif "google_service_account" in sec and "SHEET_RANGE" in sec["google_service_account"]:
+                    rng = str(sec["google_service_account"]["SHEET_RANGE"]).strip()
+            except Exception:
+                pass
     return rng or default
 
 
 def get_folder_id() -> Optional[str]:
     fid = _getenv_strip("SHEETS_FOLDER_ID")
     if not fid:
+        # raiz
         val = _get_secret("SHEETS_FOLDER_ID")
         if val is not None:
             fid = str(val).strip()
+        # tabelas alternativas
+        if not fid and _HAS_STREAMLIT and hasattr(st, "secrets"):
+            try:
+                sec = st.secrets
+                if "sheets" in sec and "SHEETS_FOLDER_ID" in sec["sheets"]:
+                    fid = str(sec["sheets"]["SHEETS_FOLDER_ID"]).strip()
+                elif "google_sheets" in sec and "SHEETS_FOLDER_ID" in sec["google_sheets"]:
+                    fid = str(sec["google_sheets"]["SHEETS_FOLDER_ID"]).strip()
+                elif "google_service_account" in sec and "SHEETS_FOLDER_ID" in sec["google_service_account"]:
+                    fid = str(sec["google_service_account"]["SHEETS_FOLDER_ID"]).strip()
+            except Exception:
+                pass
     return fid or None
 
 
@@ -94,11 +121,29 @@ def get_explicit_sheet_ids() -> List[str]:
     """Retorna lista de IDs vindos de SHEETS_IDS (env ou secrets)."""
     ids = _getenv_strip("SHEETS_IDS")
     if not ids:
+        # raiz
         val = _get_secret("SHEETS_IDS")
         if isinstance(val, list):
             return [str(x).strip() for x in val if str(x).strip()]
         if val is not None:
             ids = str(val).strip()
+        # tabelas alternativas
+        if not ids and _HAS_STREAMLIT and hasattr(st, "secrets"):
+            try:
+                sec = st.secrets
+                candidate = None
+                if "sheets" in sec and "SHEETS_IDS" in sec["sheets"]:
+                    candidate = sec["sheets"]["SHEETS_IDS"]
+                elif "google_sheets" in sec and "SHEETS_IDS" in sec["google_sheets"]:
+                    candidate = sec["google_sheets"]["SHEETS_IDS"]
+                elif "google_service_account" in sec and "SHEETS_IDS" in sec["google_service_account"]:
+                    candidate = sec["google_service_account"]["SHEETS_IDS"]
+                if isinstance(candidate, list):
+                    return [str(x).strip() for x in candidate if str(x).strip()]
+                if candidate is not None:
+                    ids = str(candidate).strip()
+            except Exception:
+                pass
     if not ids:
         return []
     return [x.strip() for x in ids.split(",") if x.strip()]
