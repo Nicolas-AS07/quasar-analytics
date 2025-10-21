@@ -79,3 +79,28 @@ class SheetsLoader:
                 "last_errors": self._last_errors[-3:],
             },
         }
+
+    # ---------------- Métodos auxiliares (stubs) para compatibilidade com main.py ----------------
+    def base_summary(self, top_n: int = 3) -> Dict[str, Any]:
+        """Resumo básico (stub)."""
+        return {"found": False, "top": []}
+
+    def search_advanced(self, query: str, top_k: int = 5) -> list:
+        """Busca avançada (stub)."""
+        return []
+
+    def build_context_snippet(self, rows: list) -> str:
+        """Constrói um snippet de contexto (stub)."""
+        return ""
+
+    def parse_month_year(self, text: str):
+        """Extrai (ano, mês) do texto (stub)."""
+        return None
+
+    def top_products(self, month_name: str, year: str, top_n: int = 3) -> Dict[str, Any]:
+        """Top produtos por mês/ano (stub)."""
+        return {"found": False, "by_quantity": [], "by_revenue": []}
+
+    def top_products_by_month_all(self, top_n: int = 3) -> Dict[str, Any]:
+        """Top produtos para todos os meses (stub)."""
+        return {"found": False}
