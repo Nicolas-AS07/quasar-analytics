@@ -97,6 +97,7 @@ def get_list_setting(*names: str) -> List[str]:
             csv = str(val).strip()
             if csv:
                 return [x.strip() for x in csv.split(",") if x.strip()]
+
     # secrets em seções
     sections = ("sheets", "google_sheets", "google_service_account")
     for name in names:
@@ -108,6 +109,7 @@ def get_list_setting(*names: str) -> List[str]:
                 csv = str(val).strip()
                 if csv:
                     return [x.strip() for x in csv.split(",") if x.strip()]
+
     # env
     for name in names:
         csv = os.getenv(name, "").strip()
@@ -117,47 +119,64 @@ def get_list_setting(*names: str) -> List[str]:
 
 
 # -------------------- Credenciais --------------------
+def _coerce_service_account_info(obj: Any) -> Optional[Dict[str, Any]]:
+    """Tenta transformar diferentes formatos em um dict de service account."""
+    if not obj:
+        return None
+    if isinstance(obj, dict):
+        return obj
+    if isinstance(obj, str):
+        s = obj.strip()
+        # Se veio como TOML/JSON string, tentar carregar
+        try:
+            data = json.loads(s)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            # Pode ser um bloco com aspas triplas sem ser JSON válido; último recurso
+            try:
+                s_clean = s.replace("\r\n", "\n")
+                if '"private_key"' in s_clean and '"client_email"' in s_clean:
+                    data = json.loads(s_clean)
+                    if isinstance(data, dict):
+                        return data
+            except Exception:
+                return None
+    return None
+
+
 def get_google_service_account_credentials() -> Credentials:
     """Cria Credentials da Service Account.
 
     Prioridade:
-    - GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (JSON como string) em secrets/env
-    - google_service_account (objeto/JSON) em secrets
-    - gcp_service_account (objeto/JSON) em secrets
-    - GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH (caminho do arquivo local)
+    1) GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (JSON como string) em secrets/env
+    2) [google_service_account] (objeto/JSON) em secrets
+    3) [gcp_service_account] (objeto/JSON) em secrets
+    4) GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH / GOOGLE_APPLICATION_CREDENTIALS (caminho do arquivo)
     """
-    # 1) JSON string explícito
+    # (1) JSON string explícito
     raw_json = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")
-    if raw_json:
-        try:
-            info = json.loads(raw_json)
-            if isinstance(info, dict):
-                return Credentials.from_service_account_info(info, scopes=SCOPES)
-        except Exception:
-            # Pode já vir em formato dict no secret
-            pass
+    info = _coerce_service_account_info(raw_json)
+    if info:
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
 
-    # 1.1) Objetos possíveis nos secrets
-    for key in ("google_service_account", "gcp_service_account"):
+    # (2) Tabelas/strings em secrets
+    for key in ("google_service_account", "gcp_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON"):
         obj = _secrets_get((key,))
-        if isinstance(obj, dict):
-            return Credentials.from_service_account_info(obj, scopes=SCOPES)
-        if isinstance(obj, str):
-            try:
-                info = json.loads(obj)
-                if isinstance(info, dict):
-                    return Credentials.from_service_account_info(info, scopes=SCOPES)
-            except Exception:
-                pass
+        info = _coerce_service_account_info(obj)
+        if info:
+            return Credentials.from_service_account_info(info, scopes=SCOPES)
 
-    # 2) Caminho de arquivo local
+    # (3) Caminho de arquivo local / env
     path = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS")
     if path and os.path.exists(path):
         return Credentials.from_service_account_file(path, scopes=SCOPES)
 
     raise FileNotFoundError(
-        "Não foi possível localizar as credenciais da Service Account. Configure o secret 'GOOGLE_SERVICE_ACCOUNT_CREDENTIALS' (JSON como string) no Streamlit Cloud,\n"
-        "ou defina a variável de ambiente GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH apontando para um arquivo fora do repositório.\n"
+        "Não foi possível localizar as credenciais da Service Account. "
+        "Defina o secret 'GOOGLE_SERVICE_ACCOUNT_CREDENTIALS' (JSON como string) no Streamlit Cloud, "
+        "ou use a seção [google_service_account], ou defina a env "
+        "GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH apontando para um arquivo fora do repositório. "
         "Dica: compartilhe a pasta do Drive com o e-mail client_email presente nas credenciais."
     )
 
@@ -204,24 +223,26 @@ def get_model_name(default: str = "gemini-2.5-pro") -> str:
 def get_service_account_email() -> Optional[str]:
     """Extrai client_email das credenciais (útil para instrução de compartilhamento)."""
     try:
-        creds = get_google_service_account_credentials()
-        # A info bruta não é exposta diretamente; tentar via arquivo/secret novamente
+        # Tentar fonte primária (string JSON)
         raw_json = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS")
-        if raw_json:
-            info = json.loads(raw_json)
-            return str(info.get("client_email")) if isinstance(info, dict) else None
-        for key in ("google_service_account", "gcp_service_account"):
+        info = _coerce_service_account_info(raw_json)
+        if info and isinstance(info, dict) and info.get("client_email"):
+            return str(info.get("client_email"))
+
+        # Tabelas/strings alternativas
+        for key in ("google_service_account", "gcp_service_account", "GOOGLE_SERVICE_ACCOUNT_JSON"):
             obj = _secrets_get((key,))
-            if isinstance(obj, dict) and obj.get("client_email"):
-                return str(obj.get("client_email"))
+            info = _coerce_service_account_info(obj)
+            if info and info.get("client_email"):
+                return str(info.get("client_email"))
+
+        # Caminho de arquivo local
         path = get_str_setting("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", "GOOGLE_APPLICATION_CREDENTIALS")
         if path and os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    info = json.load(f)
-                return str(info.get("client_email")) if isinstance(info, dict) else None
-            except Exception:
-                return None
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict) and data.get("client_email"):
+                return str(data.get("client_email"))
     except Exception:
         return None
     return None
