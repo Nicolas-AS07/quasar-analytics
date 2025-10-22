@@ -17,7 +17,6 @@ from app.ui_styles import render_css
 from app.config import (
     get_abacus_api_key,
     get_model_name,
-    get_service_account_email,
 )
 
 # --- Loader (Google APIs nativas; sem gspread)
@@ -151,21 +150,6 @@ def main() -> None:
             st.caption(f"Última atualização: {last_loaded}")
         st.divider()
 
-        # Instruções da Service Account
-        sa_email = get_service_account_email()
-        if sa_email:
-            st.info(
-                "No Streamlit Cloud, compartilhe a pasta do Drive (SHEETS_FOLDER_ID) "
-                f"com a Service Account: **{sa_email}**",
-                icon="ℹ️",
-            )
-        else:
-            st.info(
-                "Defina os segredos da Service Account no Streamlit (chave `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` "
-                "ou o bloco `[google_service_account]`).",
-                icon="ℹ️",
-            )
-
         # TTL controls — sem default value no widget (usa session_state)
         st.markdown("#### ⚙️ Recarga automática (TTL)")
         st.checkbox("Habilitar recarga automática", key="sheets_ttl_enabled")
@@ -194,57 +178,6 @@ def main() -> None:
                 st.error(f"Falha ao recarregar: {e}")
 
         st.divider()
-
-        # Diagnóstico
-        with st.expander("Diagnóstico (detalhes)"):
-            try:
-                diag_status = loader.status() if loader else SheetsLoader().status()
-            except Exception as diag_e:
-                diag_status = {"configured": False, "debug": {"exception": str(diag_e)}}
-
-            def presence_snapshot() -> dict[str, bool]:
-                keys = {
-                    "google_service_account (secrets)": False,
-                    "SHEETS_FOLDER_ID": False,
-                    "SHEETS_IDS": False,
-                    "SHEET_RANGE": False,
-                    "ABACUS_API_KEY": False,
-                }
-                try:
-                    sec = st.secrets
-                    if isinstance(sec.get("google_service_account", None), dict):
-                        keys["google_service_account (secrets)"] = True
-                    if str(sec.get("SHEETS_FOLDER_ID", "")).strip():
-                        keys["SHEETS_FOLDER_ID"] = True
-                    if str(sec.get("SHEETS_IDS", "")).strip():
-                        keys["SHEETS_IDS"] = True
-                    if str(sec.get("SHEET_RANGE", "")).strip():
-                        keys["SHEET_RANGE"] = True
-                    if str(sec.get("ABACUS_API_KEY", "")).strip():
-                        keys["ABACUS_API_KEY"] = True
-                except Exception:
-                    pass
-
-                env = os.environ
-                if str(env.get("SHEETS_FOLDER_ID", "")).strip():
-                    keys["SHEETS_FOLDER_ID"] = True
-                if str(env.get("SHEETS_IDS", "")).strip():
-                    keys["SHEETS_IDS"] = True
-                if str(env.get("SHEET_RANGE", "")).strip():
-                    keys["SHEET_RANGE"] = True
-                if str(env.get("ABACUS_API_KEY", "")).strip():
-                    keys["ABACUS_API_KEY"] = True
-                return keys
-
-            st.json(
-                {
-                    "configured": diag_status.get("configured", False),
-                    "sheets_folder_id": diag_status.get("sheets_folder_id", ""),
-                    "resolved_sheet_ids_preview": (diag_status.get("resolved_sheet_ids", []) or [])[:5],
-                    "debug": diag_status.get("debug", {}),
-                    "presence": presence_snapshot(),
-                }
-            )
 
         # Prévia das abas
         if loader:
