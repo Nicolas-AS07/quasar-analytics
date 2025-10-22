@@ -8,6 +8,8 @@ Este loader:
 """
 
 import re
+import os
+import sqlite3
 import time
 import unicodedata
 from datetime import datetime
@@ -17,6 +19,101 @@ import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 
 from app.config import get_google_apis_services, get_sheets_folder_id, get_sheet_range
+
+
+class DataStore:
+    """Persistência local simples em SQLite para dados normalizados.
+
+    Objetivos:
+    - Evitar perda de dados em falhas transitórias ou reinícios do app
+    - Permitir restauração de um estado "bom" anterior
+    """
+
+    def __init__(self, db_path: Optional[str] = None) -> None:
+        try:
+            base_dir = os.path.join(os.getcwd(), "data_cache")
+            os.makedirs(base_dir, exist_ok=True)
+            self.db_path = db_path or os.path.join(base_dir, "sheets.sqlite")
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._init_schema()
+        except Exception:
+            # Se não conseguir persistir, desativa o storage
+            self.conn = None
+
+    def available(self) -> bool:
+        return self.conn is not None
+
+    def _init_schema(self) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS norm_data (
+                key TEXT,
+                product TEXT,
+                quantity REAL,
+                revenue REAL,
+                year TEXT,
+                month_num TEXT,
+                month TEXT,
+                transaction_id TEXT,
+                source_sheet TEXT,
+                inserted_at TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                file_id TEXT,
+                worksheet TEXT,
+                file_modified_time TEXT,
+                rows INTEGER,
+                updated_at TEXT
+            )
+            """
+        )
+        self.conn.commit()
+
+    def save_norm(self, key: str, df: pd.DataFrame, file_id: str, worksheet: str, file_modified_time: Optional[str]) -> None:
+        if not self.available():
+            return
+        cur = self.conn.cursor()
+        # Limpa dados anteriores dessa aba
+        cur.execute("DELETE FROM norm_data WHERE key=?", (key,))
+
+        # Insere linhas
+        now = datetime.utcnow().isoformat()
+        cols = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "source_sheet"] if c in df.columns]
+        for _, r in df.iterrows():
+            vals = [r.get(c) for c in cols]
+            cur.execute(
+                f"INSERT INTO norm_data (key, {', '.join(cols)}, inserted_at) VALUES ({', '.join(['?']*(len(cols)+2))})",
+                [key] + vals + [now]
+            )
+        # Upsert metadata
+        cur.execute(
+            "REPLACE INTO metadata(key, file_id, worksheet, file_modified_time, rows, updated_at) VALUES (?,?,?,?,?,?)",
+            (key, file_id, worksheet, file_modified_time or "", int(df.shape[0]), now)
+        )
+        self.conn.commit()
+
+    def load_all_norm(self) -> Dict[str, pd.DataFrame]:
+        out: Dict[str, pd.DataFrame] = {}
+        if not self.available():
+            return out
+        cur = self.conn.cursor()
+        try:
+            cur.execute("SELECT DISTINCT key FROM norm_data")
+            keys = [row[0] for row in cur.fetchall()]
+            for key in keys:
+                cur.execute("SELECT product, quantity, revenue, year, month_num, month, transaction_id, source_sheet FROM norm_data WHERE key=?", (key,))
+                rows = cur.fetchall()
+                df = pd.DataFrame(rows, columns=["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "source_sheet"])
+                out[key] = df
+        except Exception:
+            return {}
+        return out
 
 
 class SheetsLoader:
@@ -32,6 +129,13 @@ class SheetsLoader:
         self._sheet_range: str = get_sheet_range("A:ZZZ")
         # Cache normalizado
         self._norm_cache: Dict[str, pd.DataFrame] = {}
+        # Persistência local (opcional)
+        try:
+            self._store = DataStore()
+            self._debug["store_available"] = self._store.available()
+        except Exception as e:
+            self._store = None
+            self._last_errors.append(f"Datastore init error: {e}")
 
     def is_configured(self) -> bool:
         """Verifica se está configurado."""
@@ -76,7 +180,7 @@ class SheetsLoader:
 
             params = dict(
                 q=query,
-                fields="nextPageToken, files(id, name, mimeType)",
+                fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
                 includeItemsFromAllDrives=True,
                 supportsAllDrives=True,
                 spaces="drive",
@@ -110,6 +214,9 @@ class SheetsLoader:
             new_cache: Dict[str, pd.DataFrame] = {}
             new_norm_cache: Dict[str, pd.DataFrame] = {}
 
+            # Index de metadados por id
+            files_meta = {f.get("id"): f for f in files}
+
             for f in files:
                 file_id = f.get("id")
                 file_name = f.get("name") or ""
@@ -121,6 +228,12 @@ class SheetsLoader:
                         raw_map, norm_map = self._load_google_sheet(file_id, file_name)
                         new_cache.update(raw_map)
                         new_norm_cache.update(norm_map)
+                        # Persiste por aba
+                        if getattr(self, "_store", None) and self._store and self._store.available():
+                            for k, df_n in norm_map.items():
+                                ws_title = k.split("::")[1] if "::" in k else ""
+                                meta = files_meta.get(file_id, {})
+                                self._store.save_norm(k, df_n, file_id=file_id, worksheet=ws_title, file_modified_time=meta.get("modifiedTime"))
                     except Exception as e:
                         self._last_errors.append(f"Load {file_name}: {e}")
                         continue
@@ -150,6 +263,17 @@ class SheetsLoader:
 
             self._debug["loaded_map_preview"] = dict(list(loaded_map.items())[:5])
             self._last_counts = {"sheets": len(files), "rows": total_rows}
+            # Se ainda não carregamos nada mas temos store, restaura do store
+            if not self._norm_cache and getattr(self, "_store", None) and self._store and self._store.available():
+                restored = self._store.load_all_norm()
+                if restored:
+                    self._norm_cache = restored
+                    # _cache (raw) fica vazio; mas já temos normalizado suficiente para trabalhar
+                    self._debug["restored_from_store"] = True
+                    loaded_map = {k: int(v.shape[0]) for k, v in self._norm_cache.items()}
+                    total_rows = sum(loaded_map.values())
+                    self._last_counts = {"sheets": len(loaded_map), "rows": total_rows}
+
             return self._last_counts["sheets"], self._last_counts["rows"]
             
         except Exception as e:
@@ -600,7 +724,7 @@ class SheetsLoader:
 
             key = f"{spreadsheet_id}::{title}"
             raw_map[key] = df
-            norm_map[key] = self._normalize_dataframe(df, file_name)
+            norm_map[key] = self._normalize_dataframe(df, file_name, source_key=key)
 
         return raw_map, norm_map
 
@@ -613,7 +737,7 @@ class SheetsLoader:
             s = chr(65 + rem) + s
         return s
 
-    def _normalize_dataframe(self, df: pd.DataFrame, file_name: str) -> pd.DataFrame:
+    def _normalize_dataframe(self, df: pd.DataFrame, file_name: str, source_key: Optional[str] = None) -> pd.DataFrame:
         cols = [str(c).strip() for c in df.columns]
         df = df.copy()
         df.columns = cols
@@ -674,8 +798,12 @@ class SheetsLoader:
         if trans_col and trans_col in df.columns:
             out["transaction_id"] = df[trans_col].astype(str).str.strip()
 
+        # Coluna de origem
+        if source_key:
+            out["source_sheet"] = source_key
+
         # Reordena colunas
-        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "product_norm"] if c in out.columns]
+        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "product_norm", "source_sheet"] if c in out.columns]
         return out[cols_order]
 
     def _infer_period_from_title(self, title: str) -> Tuple[Optional[str], Optional[str]]:
