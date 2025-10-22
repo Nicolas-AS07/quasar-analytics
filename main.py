@@ -101,12 +101,10 @@ def initialize_session() -> None:
 
     if loader.is_configured():
         try:
-            st.success("✅ SheetsLoader configurado corretamente!")
             n_sheets, n_rows = loader.load_all()
             st.session_state.sheets = loader
             st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
             st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            st.success(f"📊 Detectadas {n_sheets} planilhas!")
         except Exception as e:
             st.error(f"❌ Erro ao carregar planilhas: {e}")
             st.session_state.sheets = None
@@ -245,27 +243,6 @@ def main() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("🔍 Análise Completa", use_container_width=True, key="chip1"):
-                st.session_state.messages.append(
-                    {"role": "user", "content": "Mostre uma análise de vendas do último mês", "timestamp": datetime.now().strftime("%H:%M")}
-                )
-                st.rerun()
-        with c2:
-            if st.button("📊 Top Produtos", use_container_width=True, key="chip2"):
-                st.session_state.messages.append(
-                    {"role": "user", "content": "Quais foram os produtos mais vendidos?", "timestamp": datetime.now().strftime("%H:%M")}
-                )
-                st.rerun()
-        with c3:
-            if st.button("💰 Performance", use_container_width=True, key="chip3"):
-                st.session_state.messages.append(
-                    {"role": "user", "content": "Como está a performance de vendas este ano?", "timestamp": datetime.now().strftime("%H:%M")}
-                )
-                st.rerun()
         st.markdown(
             """
             <div class="landing-footer">
@@ -279,6 +256,28 @@ def main() -> None:
         st.markdown('<div class="chat-messages">', unsafe_allow_html=True)
         display_chat_messages()
         st.markdown("</div>", unsafe_allow_html=True)
+
+    # Chips acima da caixa de texto (sempre visíveis)
+    st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("🔍 Análise Completa", use_container_width=True, key="chip_b1"):
+            st.session_state.messages.append(
+                {"role": "user", "content": "Mostre uma análise de vendas do último mês", "timestamp": datetime.now().strftime("%H:%M")}
+            )
+            st.rerun()
+    with c2:
+        if st.button("📊 Top Produtos", use_container_width=True, key="chip_b2"):
+            st.session_state.messages.append(
+                {"role": "user", "content": "Quais foram os produtos mais vendidos?", "timestamp": datetime.now().strftime("%H:%M")}
+            )
+            st.rerun()
+    with c3:
+        if st.button("💰 Performance", use_container_width=True, key="chip_b3"):
+            st.session_state.messages.append(
+                {"role": "user", "content": "Como está a performance de vendas este ano?", "timestamp": datetime.now().strftime("%H:%M")}
+            )
+            st.rerun()
 
     # Campo de chat
     user_input = st.chat_input("O que você quer saber?")
