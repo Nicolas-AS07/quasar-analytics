@@ -108,7 +108,8 @@ def get_google_service_account_credentials() -> Dict[str, Any]:
 
 # Variáveis globais (carregadas na importação; não obrigatórias aqui)
 GOOGLE_DRIVE_FOLDER_ID = _get("GOOGLE_DRIVE_FOLDER_ID", required=False, default="")
-SHEETS_FOLDER_ID = GOOGLE_DRIVE_FOLDER_ID  # Alias
+# Lê também SHEETS_FOLDER_ID e usa GOOGLE_DRIVE_FOLDER_ID como fallback
+SHEETS_FOLDER_ID = _get("SHEETS_FOLDER_ID", required=False, default=GOOGLE_DRIVE_FOLDER_ID)
 GEMINI_API_KEY = _get("GEMINI_API_KEY", required=False, default="")
 ABACUS_API_KEY = _get("ABACUS_API_KEY", required=False, default="")
 MODEL_NAME = _get("MODEL_NAME", required=False, default="gemini-2.5-pro")
@@ -133,7 +134,10 @@ def get_service_account_email() -> Optional[str]:
 
 
 def get_sheets_folder_id() -> Optional[str]:
-    return SHEETS_FOLDER_ID or None
+    """Resolve ID da pasta a partir de GOOGLE_DRIVE_FOLDER_ID ou SHEETS_FOLDER_ID."""
+    # Preferência: GOOGLE_DRIVE_FOLDER_ID -> SHEETS_FOLDER_ID
+    val = GOOGLE_DRIVE_FOLDER_ID or SHEETS_FOLDER_ID or _get("GOOGLE_DRIVE_FOLDER_ID", required=False) or _get("SHEETS_FOLDER_ID", required=False)
+    return val or None
 
 
 def get_google_apis_services():
