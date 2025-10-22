@@ -59,7 +59,8 @@ class SheetsLoader:
             # 1) Metadados da pasta — detecta Shared Drive
             folder_meta = drive_service.files().get(
                 fileId=self.sheet_folder_id,
-                fields="id, name, mimeType, driveId, parents"
+                fields="id, name, mimeType, driveId, parents",
+                supportsAllDrives=True,
             ).execute()
             self._debug["folder_meta"] = folder_meta
 
