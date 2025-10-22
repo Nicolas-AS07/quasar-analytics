@@ -96,6 +96,13 @@ def initialize_session() -> None:
     if "sheets_ttl_seconds" not in st.session_state:
         st.session_state["sheets_ttl_seconds"] = 60
 
+    # Preferências de contexto bruto
+    st.session_state.setdefault("include_raw_context", False)
+    st.session_state.setdefault("raw_layer", "samples")
+    st.session_state.setdefault("raw_rows_per_sheet", 200)
+    st.session_state.setdefault("raw_format", "csv")
+    st.session_state.setdefault("raw_max_chars", 45000)
+
     # Carrega planilhas de forma simplificada
     loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
 
@@ -193,6 +200,35 @@ def main() -> None:
                     st.dataframe(preview, use_container_width=True, hide_index=True)
             except Exception:
                 pass
+
+        # Camadas de contexto bruto para IA
+        st.divider()
+        st.markdown("#### 🧱 Camadas de contexto (dados brutos)")
+        st.checkbox("Incluir dados brutos no prompt", key="include_raw_context")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.selectbox("Camada", options=["schema", "samples", "full"], key="raw_layer")
+            st.selectbox("Formato", options=["csv", "jsonl"], key="raw_format")
+        with col_b:
+            st.number_input("Linhas por aba", min_value=10, max_value=5000, step=50, key="raw_rows_per_sheet")
+            st.number_input("Máx. caracteres", min_value=5000, max_value=120000, step=5000, key="raw_max_chars")
+
+        if loader and st.session_state.get("include_raw_context"):
+            try:
+                preview_raw = loader.build_raw_context(
+                    layer=st.session_state.get("raw_layer", "samples"),
+                    rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 200)),
+                    fmt=st.session_state.get("raw_format", "csv"),
+                    max_chars=int(st.session_state.get("raw_max_chars", 45000)),
+                )
+                st.download_button(
+                    "⬇️ Baixar dados brutos (texto)",
+                    data=preview_raw.encode("utf-8"),
+                    file_name=f"raw_context_{st.session_state.get('raw_layer','samples')}.{ 'txt' }",
+                    mime="text/plain",
+                )
+            except Exception as e:
+                st.caption(f"Não foi possível gerar prévia de dados brutos: {e}")
 
         # Snapshot JSON
         if loader:
@@ -383,7 +419,30 @@ def main() -> None:
                 rows = loader.search_advanced(last_user_msg, top_k=5)
                 sheets_ctx = loader.build_context_snippet(rows)
 
-        final_prompt = "Contexto (planilhas/agregações):\n" + (sheets_ctx if sheets_ctx else "[sem contexto disponível]") + "\n\nPergunta do usuário: " + last_user_msg
+        # Dados brutos como camada adicional (opcional)
+        raw_ctx = ""
+        if st.session_state.get("include_raw_context") and loader:
+            try:
+                # Reserva ~2/3 do limite para dados brutos, o restante fica para agregados/pergunta
+                max_chars = int(st.session_state.get("raw_max_chars", 45000))
+                raw_ctx = loader.build_raw_context(
+                    layer=st.session_state.get("raw_layer", "samples"),
+                    rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 200)),
+                    fmt=st.session_state.get("raw_format", "csv"),
+                    max_chars=max_chars,
+                )
+            except Exception as e:
+                raw_ctx = f"[falha ao gerar dados brutos: {e}]"
+
+        full_ctx_parts = []
+        if sheets_ctx:
+            full_ctx_parts.append("Contexto (planilhas/agregações):\n" + sheets_ctx)
+        if raw_ctx:
+            full_ctx_parts.append("Contexto (dados brutos):\n" + raw_ctx)
+        if not full_ctx_parts:
+            full_ctx_parts.append("[sem contexto disponível]")
+
+        final_prompt = "\n\n".join(full_ctx_parts) + "\n\nPergunta do usuário: " + last_user_msg
 
         if st.session_state.client:
             try:

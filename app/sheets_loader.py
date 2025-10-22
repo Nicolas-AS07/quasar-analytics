@@ -148,6 +148,111 @@ class SheetsLoader:
             },
         }
 
+    # ---------------- Camadas de contexto bruto ----------------
+    def build_raw_context(
+        self,
+        layer: str = "samples",
+        rows_per_sheet: int = 200,
+        fmt: str = "csv",
+        max_chars: int = 60000,
+    ) -> str:
+        """
+        Gera um texto contendo dados brutos das abas carregadas em camadas.
+
+        Parâmetros:
+        - layer: "schema" (somente colunas e contagem), "samples" (N linhas por aba) ou "full" (todas as linhas, limitado por max_chars)
+        - rows_per_sheet: usado em "samples" e como fallback em "full" quando necessário
+        - fmt: "csv" ou "jsonl"
+        - max_chars: limite total de caracteres do texto gerado
+
+        Retorna:
+        - Uma string com blocos demarcados por BEGIN_SHEET/END_SHEET por aba
+        """
+        if not self._cache:
+            return ""
+
+        layer = (layer or "samples").lower().strip()
+        fmt = (fmt or "csv").lower().strip()
+        if layer not in {"schema", "samples", "full"}:
+            layer = "samples"
+        if fmt not in {"csv", "jsonl"}:
+            fmt = "csv"
+
+        # Ordena por tamanho crescente para tentar incluir mais abas dentro do limite
+        items = sorted(self._cache.items(), key=lambda kv: int(kv[1].shape[0]))
+
+        header = f"=== DADOS BRUTOS (camada={layer}, formato={fmt}) ===\n"
+        header += "Cada bloco possui demarcações: BEGIN_SHEET key=<planilha::aba> rows=<n> e END_SHEET.\n"
+        header += "Use o delimitador para parsear de forma robusta.\n\n"
+        out_parts: List[str] = [header]
+        total = len(header)
+
+        for key, df in items:
+            n_rows = int(df.shape[0])
+            cols = list(df.columns)
+
+            if layer == "schema":
+                block = (
+                    f"BEGIN_SHEET key={key} rows={n_rows} format=schema\n"
+                    f"columns: {', '.join(map(str, cols))}\n"
+                    f"END_SHEET\n\n"
+                )
+                if total + len(block) > max_chars:
+                    out_parts.append("...TRUNCATED DUE TO SIZE LIMIT...")
+                    break
+                out_parts.append(block)
+                total += len(block)
+                continue
+
+            # Escolhe subconjunto de linhas
+            if layer == "samples":
+                sub = df.head(max(1, int(rows_per_sheet)))
+            else:  # full
+                sub = df.copy()
+
+            # Renderiza no formato desejado
+            if fmt == "csv":
+                try:
+                    data_str = sub.to_csv(index=False)
+                except Exception:
+                    # Fallback simples
+                    data_str = "\n".join([",".join(map(lambda x: str(x) if x is not None else "", sub.columns))] + [
+                        ",".join(map(lambda x: str(x) if x is not None else "", row)) for row in sub.to_numpy()
+                    ])
+            else:  # jsonl
+                try:
+                    recs = sub.to_dict(orient="records")
+                except Exception:
+                    recs = []
+                import json as _json
+                data_str = "\n".join(_json.dumps(r, ensure_ascii=False) for r in recs)
+
+            block_header = f"BEGIN_SHEET key={key} rows={n_rows} format={fmt}\n"
+            block_footer = "\nEND_SHEET\n\n"
+            block = block_header + data_str + block_footer
+
+            if total + len(block) > max_chars:
+                # Se for camada full, tenta reduzir para um sample antes de truncar
+                if layer == "full":
+                    sub2 = df.head(max(1, int(rows_per_sheet)))
+                    if fmt == "csv":
+                        data_str2 = sub2.to_csv(index=False)
+                    else:
+                        import json as _json
+                        data_str2 = "\n".join(_json.dumps(r, ensure_ascii=False) for r in sub2.to_dict(orient="records"))
+                    block2 = block_header + data_str2 + block_footer
+                    if total + len(block2) <= max_chars:
+                        out_parts.append(block2)
+                        total += len(block2)
+                        continue
+                out_parts.append("...TRUNCATED DUE TO SIZE LIMIT...")
+                break
+
+            out_parts.append(block)
+            total += len(block)
+
+        return "".join(out_parts)
+
     # ---------------- Métodos auxiliares (stubs) para compatibilidade com main.py ----------------
     def base_summary(self, top_n: int = 3) -> Dict[str, Any]:
         """Resumo de base com preview dos maiores datasets."""

@@ -2,6 +2,23 @@
 
 Um chatbot moderno e elegante desenvolvido em Python com Streamlit, integrado à API da Abacus usando o modelo Route-LLM (powered by Gemini).
 
+## 🧱 Novidade: Camadas de Contexto com Dados Brutos
+
+Agora você pode incluir no prompt da IA os dados brutos das suas planilhas do Google de forma controlada:
+
+- Camadas disponíveis: `schema` (somente colunas), `samples` (amostras por aba) e `full` (conteúdo completo, limitado por tamanho)
+- Formatos: `csv` ou `jsonl`
+- Limites configuráveis na barra lateral: número de linhas por aba e limite de caracteres
+
+Como usar:
+
+1. Abra a barra lateral do app
+2. Em "Camadas de contexto (dados brutos)", marque "Incluir dados brutos no prompt"
+3. Escolha a camada, o formato e os limites
+4. Opcional: baixe um preview do contexto bruto pelo botão de download para inspecionar
+
+Isso permite que a IA leia o conteúdo original das planilhas e formate a saída como você quiser, mantendo o controle sobre tamanho e performance.
+
 ## ✨ Características
 
 - **Interface Moderna**: Design bonito e responsivo com gradientes e animações
