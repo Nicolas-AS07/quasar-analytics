@@ -324,6 +324,9 @@ class SheetsLoader:
         date_col = pick([
             "data", "data_venda", "dia", "date"
         ])
+        trans_col = pick([
+            "id_transacao", "id da transacao", "id_transação", "id da transação", "transaction_id", "transacao", "transacao_id", "pedido", "order_id", "id"
+        ])
 
         out = pd.DataFrame()
         if product_col:
@@ -352,9 +355,11 @@ class SheetsLoader:
 
         out["month"] = out["month_num"].map(lambda m: self._pt_month_name(m) if m else "")
         out["product_norm"] = out.get("product", pd.Series(dtype=str)).map(lambda x: self._norm(str(x)))
+        if trans_col and trans_col in df.columns:
+            out["transaction_id"] = df[trans_col].astype(str).str.strip()
 
         # Reordena colunas
-        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "product_norm"] if c in out.columns]
+        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "product_norm"] if c in out.columns]
         return out[cols_order]
 
     def _infer_period_from_title(self, title: str) -> Tuple[Optional[str], Optional[str]]:
@@ -370,7 +375,7 @@ class SheetsLoader:
 
     def _concat_norm(self) -> pd.DataFrame:
         if not self._norm_cache:
-            return pd.DataFrame(columns=["product", "quantity", "revenue", "year", "month_num", "month"])
+            return pd.DataFrame(columns=["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id"])
         return pd.concat(self._norm_cache.values(), ignore_index=True)
 
     @staticmethod
@@ -418,3 +423,47 @@ class SheetsLoader:
             "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro",
         }
         return mapping.get(month_num, month_num)
+
+    # --------- APIs públicas adicionais para o app ---------
+    def latest_period(self) -> Optional[Tuple[str, str]]:
+        """Retorna (year, month_num) mais recente disponível."""
+        df = self._concat_norm()
+        if df.empty:
+            return None
+        sub = df[["year", "month_num"]].dropna()
+        if sub.empty:
+            return None
+        sub["year_int"] = pd.to_numeric(sub["year"], errors="coerce")
+        sub["month_int"] = pd.to_numeric(sub["month_num"], errors="coerce")
+        sub = sub.dropna()
+        if sub.empty:
+            return None
+        sub = sub.sort_values(["year_int", "month_int"], ascending=[True, True])
+        last = sub.iloc[-1]
+        return str(int(last["year_int"])), f"{int(last['month_int']):02d}"
+
+    def top_products_default(self, top_n: int = 3) -> Dict[str, Any]:
+        """Top produtos para o período mais recente quando o usuário não especifica mês/ano."""
+        lm = self.latest_period()
+        if not lm:
+            return {"found": False}
+        year, month_num = lm
+        month_name = self._pt_month_name(month_num)
+        return self.top_products(month_name, year, top_n=top_n)
+
+    def revenue_by_transaction(self, trans_id: str, year: Optional[str] = None, month_num: Optional[str] = None) -> Dict[str, Any]:
+        """Soma a receita por ID de transação. Se (year, month_num) fornecidos, filtra o período."""
+        if not trans_id:
+            return {"found": False}
+        df = self._concat_norm()
+        if df.empty or "transaction_id" not in df.columns:
+            return {"found": False}
+        sub = df[df["transaction_id"].astype(str).str.strip() == str(trans_id).strip()].copy()
+        if year:
+            sub = sub[sub["year"] == str(year)]
+        if month_num:
+            sub = sub[sub["month_num"] == str(month_num)]
+        if sub.empty:
+            return {"found": False}
+        total = float(sub["revenue"].sum()) if "revenue" in sub.columns else 0.0
+        return {"found": True, "transaction_id": trans_id, "year": str(year) if year else None, "month": self._pt_month_name(month_num) if month_num else None, "revenue": total}

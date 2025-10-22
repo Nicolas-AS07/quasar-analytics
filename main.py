@@ -308,13 +308,17 @@ def main() -> None:
                 pass
 
             text_lower = last_user_msg.lower()
+            handled = False
+
+            # 1) Query: top produtos
             if (("top" in text_lower or "mais vendido" in text_lower or "mais vendidos" in text_lower or "top 3" in text_lower)
                     and ("produto" in text_lower)):
                 if any(t in text_lower for t in ["todos os meses", "cada mês", "cada mes", "por mês", "por mes"]):
                     res_all = loader.top_products_by_month_all(top_n=3)
                     if res_all.get("found"):
                         sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (dados agregados por mês):\n" + json.dumps(res_all, ensure_ascii=False)).strip()
-                if not sheets_ctx:
+                        handled = True
+                else:
                     ym = loader.parse_month_year(last_user_msg)
                     if ym:
                         year, month_num = ym
@@ -333,8 +337,37 @@ def main() -> None:
                                 "top_por_receita": res.get("by_revenue", []),
                             }
                             sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (dados agregados):\n" + json.dumps(agg_ctx, ensure_ascii=False)).strip()
+                            handled = True
+                    else:
+                        # Sem mês/ano explícitos: usa o período mais recente
+                        res_def = loader.top_products_default(top_n=3)
+                        if res_def.get("found"):
+                            agg_ctx = {
+                                "ano": res_def.get("year"),
+                                "mes": res_def.get("month"),
+                                "top_por_quantidade": res_def.get("by_quantity", []),
+                                "top_por_receita": res_def.get("by_revenue", []),
+                            }
+                            sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (dados agregados):\n" + json.dumps(agg_ctx, ensure_ascii=False)).strip()
+                            handled = True
 
-            if not sheets_ctx:
+            # 2) Query: receita por ID de transação
+            if not handled:
+                import re
+                m = re.search(r"\b([A-Za-z]-\d{6}-\d+)\b|\b(T-\d{6}-\d+)\b", last_user_msg)
+                trans_id = m.group(0) if m else None
+                if trans_id and ("receita" in text_lower or "valor" in text_lower or "total" in text_lower):
+                    ym = loader.parse_month_year(last_user_msg)
+                    year = month_num = None
+                    if ym:
+                        year, month_num = ym
+                    res_tx = loader.revenue_by_transaction(trans_id, year=year, month_num=month_num)
+                    if res_tx.get("found"):
+                        sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (receita por transação):\n" + json.dumps(res_tx, ensure_ascii=False)).strip()
+                        handled = True
+
+            # 3) Fallback: busca por produtos
+            if not handled:
                 rows = loader.search_advanced(last_user_msg, top_k=5)
                 sheets_ctx = loader.build_context_snippet(rows)
 
