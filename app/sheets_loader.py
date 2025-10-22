@@ -8,6 +8,7 @@ Este loader:
 """
 
 import re
+import time
 import unicodedata
 from datetime import datetime
 from collections import defaultdict
@@ -27,7 +28,8 @@ class SheetsLoader:
         self._last_errors: List[str] = []
         self._debug: Dict[str, Any] = {}
         self._last_counts: Dict[str, int] = {"sheets": 0, "rows": 0}
-        self._sheet_range: str = get_sheet_range("A:Z")
+        # Usa um range amplo por padrão; ainda assim substituímos dinamicamente via gridProperties
+        self._sheet_range: str = get_sheet_range("A:ZZZ")
         # Cache normalizado
         self._norm_cache: Dict[str, pd.DataFrame] = {}
 
@@ -104,9 +106,9 @@ class SheetsLoader:
             self._debug["files_found"] = [{"id": f.get("id"), "name": f.get("name"), "mimeType": f.get("mimeType")} for f in files]
             total_rows = 0
 
-            # Limpa caches
-            self._cache.clear()
-            self._norm_cache.clear()
+            # Construímos caches temporários; em caso de falhas, preservamos dados da execução anterior
+            new_cache: Dict[str, pd.DataFrame] = {}
+            new_norm_cache: Dict[str, pd.DataFrame] = {}
 
             for f in files:
                 file_id = f.get("id")
@@ -116,13 +118,33 @@ class SheetsLoader:
                 # Apenas Google Sheets no primeiro passo
                 if mime == "application/vnd.google-apps.spreadsheet":
                     try:
-                        self._load_google_sheet(file_id, file_name)
+                        raw_map, norm_map = self._load_google_sheet(file_id, file_name)
+                        new_cache.update(raw_map)
+                        new_norm_cache.update(norm_map)
                     except Exception as e:
                         self._last_errors.append(f"Load {file_name}: {e}")
                         continue
                 # CSV/XLSX poderiam ser suportados depois com export/download
 
             # Contagem final
+            # Mescla com caches anteriores para evitar quedas abruptas em caso de falhas transitórias
+            # Mantém somente chaves cujos arquivos ainda existem na pasta
+            valid_file_ids = {f.get("id") for f in files}
+            def key_file_id(k: str) -> str:
+                return k.split("::")[0] if "::" in k else k
+
+            # Preserva dados antigos apenas quando a aba não foi carregada nesta execução, mas o arquivo ainda existe
+            for k, df_old in list(self._cache.items()):
+                if k not in new_cache and key_file_id(k) in valid_file_ids:
+                    new_cache[k] = df_old
+            for k, df_old in list(self._norm_cache.items()):
+                if k not in new_norm_cache and key_file_id(k) in valid_file_ids:
+                    new_norm_cache[k] = df_old
+
+            # Substitui caches
+            self._cache = new_cache
+            self._norm_cache = new_norm_cache
+
             loaded_map = {k: int(v.shape[0]) for k, v in self._cache.items()}
             total_rows = sum(loaded_map.values())
 
@@ -505,17 +527,58 @@ class SheetsLoader:
         return out
 
     # ---------------- Internals ----------------
-    def _load_google_sheet(self, spreadsheet_id: str, file_name: str) -> None:
-        """Carrega todas as abas de um arquivo Google Sheets para o cache e normaliza."""
+    def _load_google_sheet(self, spreadsheet_id: str, file_name: str) -> Tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
+        """Carrega todas as abas de um arquivo Google Sheets e retorna mapas (raw, norm).
+
+        Implementa range dinâmico via gridProperties e tentativas com backoff para maior robustez.
+        """
+        raw_map: Dict[str, pd.DataFrame] = {}
+        norm_map: Dict[str, pd.DataFrame] = {}
+
         _, sheets_service = get_google_apis_services()
-        meta = sheets_service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheets = meta.get("sheets", [])
+
+        # Obter metadados com retries
+        meta = None
+        for attempt in range(3):
+            try:
+                meta = sheets_service.spreadsheets().get(
+                    spreadsheetId=spreadsheet_id,
+                    fields="sheets(properties(title,gridProperties(columnCount,rowCount)))"
+                ).execute()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    raise
+                time.sleep(1.5 * (attempt + 1))
+
+        sheets = meta.get("sheets", []) if meta else []
         for s in sheets:
             props = s.get("properties", {})
             title = props.get("title") or "Sheet1"
-            rng = f"'{title}'!{self._sheet_range}"
-            result = sheets_service.spreadsheets().values().get(spreadsheetId=spreadsheet_id, range=rng).execute()
-            values = result.get("values", [])
+            grid = props.get("gridProperties", {}) or {}
+            col_count = int(grid.get("columnCount") or 26)
+            # Constrói range dinâmico: A:{last_col}
+            last_col = self._num_to_col_letters(max(1, col_count))
+            rng = f"'{title}'!A:{last_col}"
+
+            # Buscar valores com retries
+            values = []
+            for attempt in range(3):
+                try:
+                    result = sheets_service.spreadsheets().values().get(
+                        spreadsheetId=spreadsheet_id,
+                        range=rng,
+                        valueRenderOption="UNFORMATTED_VALUE",
+                        dateTimeRenderOption="FORMATTED_STRING",
+                    ).execute()
+                    values = result.get("values", [])
+                    break
+                except Exception:
+                    if attempt == 2:
+                        values = []
+                        break
+                    time.sleep(1.5 * (attempt + 1))
+
             if not values:
                 continue
             # Detecta header (primeira linha não vazia)
@@ -536,8 +599,19 @@ class SheetsLoader:
             df = pd.DataFrame(fixed, columns=header)
 
             key = f"{spreadsheet_id}::{title}"
-            self._cache[key] = df
-            self._norm_cache[key] = self._normalize_dataframe(df, file_name)
+            raw_map[key] = df
+            norm_map[key] = self._normalize_dataframe(df, file_name)
+
+        return raw_map, norm_map
+
+    @staticmethod
+    def _num_to_col_letters(n: int) -> str:
+        """Converte 1->A, 26->Z, 27->AA, etc."""
+        s = ""
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            s = chr(65 + rem) + s
+        return s
 
     def _normalize_dataframe(self, df: pd.DataFrame, file_name: str) -> pd.DataFrame:
         cols = [str(c).strip() for c in df.columns]
