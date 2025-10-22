@@ -13,6 +13,8 @@ class SheetsLoader:
         self.sheet_folder_id = get_sheets_folder_id() or ""
         self._cache: Dict[str, pd.DataFrame] = {}
         self._last_errors: List[str] = []
+        self._debug: Dict[str, Any] = {}
+        self._last_counts: Dict[str, int] = {"sheets": 0, "rows": 0}
 
     def is_configured(self) -> bool:
         """Verifica se está configurado."""
@@ -32,36 +34,64 @@ class SheetsLoader:
             return False
 
     def load_all(self) -> Tuple[int, int]:
-        """Carrega todas as planilhas da pasta."""
+        """Carrega todas as planilhas da pasta (listagem robusta, com Shared Drives)."""
         if not self.is_configured():
             raise RuntimeError("SheetsLoader não está configurado")
         
         try:
             drive_service, sheets_service = get_google_apis_services()
             
-            # Query para buscar planilhas na pasta
+            # 1) Metadados da pasta — detecta Shared Drive
+            folder_meta = drive_service.files().get(
+                fileId=self.sheet_folder_id,
+                fields="id, name, mimeType, driveId, parents"
+            ).execute()
+            self._debug["folder_meta"] = folder_meta
+
+            # 2) Monta consulta robusta
             query = (
                 f"'{self.sheet_folder_id}' in parents and ("
                 "mimeType='application/vnd.google-apps.spreadsheet' or "
                 "mimeType='text/csv' or "
                 "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')"
             )
-            
-            # Lista arquivos
-            results = drive_service.files().list(
+
+            params = dict(
                 q=query,
-                fields="files(id, name, mimeType)",
+                fields="nextPageToken, files(id, name, mimeType)",
                 includeItemsFromAllDrives=True,
-                supportsAllDrives=True
-            ).execute()
-            
-            files = results.get('files', [])
+                supportsAllDrives=True,
+                spaces="drive",
+                pageSize=1000,
+            )
+
+            drive_id = folder_meta.get("driveId")
+            if drive_id:
+                # Pasta dentro de um Shared Drive
+                params.update(corpora="drive", driveId=drive_id)
+            else:
+                # Meu Drive do usuário
+                params.update(corpora="user")
+
+            # 3) Paginação
+            files: List[Dict[str, Any]] = []
+            page_token = None
+            while True:
+                if page_token:
+                    params["pageToken"] = page_token
+                results = drive_service.files().list(**params).execute()
+                files.extend(results.get("files", []))
+                page_token = results.get("nextPageToken")
+                if not page_token:
+                    break
+
+            self._debug["files_found"] = [{"id": f.get("id"), "name": f.get("name"), "mimeType": f.get("mimeType")} for f in files]
             total_rows = 0
             
             # Para esta versão simplificada, apenas conta os arquivos
             # A implementação completa carregaria os dados reais aqui
-            
-            return len(files), total_rows
+            self._last_counts = {"sheets": len(files), "rows": total_rows}
+            return self._last_counts["sheets"], self._last_counts["rows"]
             
         except Exception as e:
             self._last_errors.append(f"Load error: {e}")
@@ -72,11 +102,12 @@ class SheetsLoader:
         return {
             "configured": self.is_configured(),
             "sheets_folder_id": self.sheet_folder_id,
-            "sheets_count": 0,  # Implementar quando necessário
+            "sheets_count": self._last_counts.get("sheets", 0),
             "worksheets_count": len(self._cache),
             "loaded": {},
             "debug": {
                 "last_errors": self._last_errors[-3:],
+                **self._debug,
             },
         }
 
