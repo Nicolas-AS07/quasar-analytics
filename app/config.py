@@ -66,6 +66,24 @@ def get_google_service_account_credentials() -> Dict[str, Any]:
         except json.JSONDecodeError as e:
             raise RuntimeError(f"JSON das credenciais inválido: {e}")
     
+    # Método 1b: Bloco de secrets TOML como dict (compat com projetos existentes)
+    if st is not None:
+        for key in ("google_service_account", "gcp_service_account"):
+            try:
+                obj = st.secrets.get(key)
+            except Exception:
+                obj = None
+            # dict direto
+            if isinstance(obj, dict):
+                return obj  # já é o json das credenciais
+            # string JSON
+            if isinstance(obj, str) and obj.strip():
+                try:
+                    return json.loads(obj)
+                except Exception:
+                    # ignora e segue para outros métodos
+                    pass
+    
     # Método 2: Arquivo local (para desenvolvimento)
     creds_path = _get("GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH", required=False)
     
@@ -82,8 +100,9 @@ def get_google_service_account_credentials() -> Dict[str, Any]:
     raise RuntimeError(
         "Credenciais do Google Service Account não configuradas.\n\n"
         "Configure usando um dos métodos:\n"
-        "1. GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (JSON completo)\n"
-        "2. GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH (caminho do arquivo)\n"
+        "1. GOOGLE_SERVICE_ACCOUNT_CREDENTIALS (JSON completo como string)\n"
+        "2. Bloco [google_service_account] no secrets.toml (dict com o JSON completo)\n"
+        "3. GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH (caminho do arquivo local, em dev)\n"
     )
 
 
@@ -108,7 +127,7 @@ def get_service_account_email() -> Optional[str]:
     """Extrai email da service account."""
     try:
         creds = get_google_service_account_credentials()
-        return creds.get("client_email")
+        return str(creds.get("client_email") or "")
     except Exception:
         return None
 
