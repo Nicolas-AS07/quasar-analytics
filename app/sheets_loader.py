@@ -326,8 +326,8 @@ class SheetsLoader:
                 if name in t:
                     m = re.search(r"(19\d{2}|20\d{2})", t)
                     year = m.group(1) if m else None
-                    if year:
-                        return str(year), num
+                    # Retorna mesmo se só houver mês; ano pode ser resolvido depois
+                    return (str(year) if year else None), num
         # fallback: só ano
         m = re.search(r"(19\d{2}|20\d{2})", t)
         if m:
@@ -401,6 +401,108 @@ class SheetsLoader:
             return {"found": False}
         year, month_num = lm
         return self.revenue_total(year, month_num)
+
+    def latest_year_for_month(self, month_num: str) -> Optional[str]:
+        """Retorna o ano mais recente disponível para um determinado mês ("01".."12")."""
+        if not month_num:
+            return None
+        df = self._concat_norm()
+        if df.empty:
+            return None
+        sub = df[df["month_num"] == str(month_num)].copy()
+        if sub.empty:
+            return None
+        sub["year_int"] = pd.to_numeric(sub["year"], errors="coerce")
+        sub = sub.dropna(subset=["year_int"])  # remove anos vazios
+        if sub.empty:
+            return None
+        latest_year = int(sub["year_int"].max())
+        return str(latest_year)
+
+    def build_raw_context_filtered(
+        self,
+        year: Optional[str] = None,
+        month_num: Optional[str] = None,
+        fmt: str = "jsonl",
+        max_chars: int = 60000,
+    ) -> str:
+        """
+        Constrói um contexto bruto contendo TODAS as linhas normalizadas do período indicado.
+        Útil para permitir que a LLM compute totais de forma exata.
+
+        - Se apenas month_num for informado, usa o ano mais recente disponível para esse mês.
+        - Se nada for informado, usa o período mais recente disponível.
+        - Campos incluídos: source_sheet, product, quantity, revenue, year, month_num, month, transaction_id
+        - Formato: jsonl (recomendado) ou csv
+        """
+        df = self._concat_norm()
+        if df.empty:
+            return ""
+
+        # Resolve período
+        y, m = year, month_num
+        if m and not y:
+            y = self.latest_year_for_month(m)
+        if not (y and m):
+            lm = self.latest_period()
+            if lm:
+                y, m = lm
+            else:
+                return ""
+
+        # Filtra
+        sub = df[(df["year"] == str(y)) & (df["month_num"] == str(m))].copy()
+        if sub.empty:
+            return ""
+
+        # Inclui coluna de origem se disponível
+        # Como _concat_norm perde a chave original, tentamos aproveitar index; caso não haja, omite
+        # Para garantir, adicionamos um marcador genérico
+        sub = sub.copy()
+        if "source_sheet" not in sub.columns:
+            sub["source_sheet"] = "unknown"
+
+        cols = [c for c in ["source_sheet", "product", "quantity", "revenue", "year", "month_num", "month", "transaction_id"] if c in sub.columns]
+        sub = sub[cols]
+
+        header = f"BEGIN_DATA period={y}-{m} format={fmt}\n"
+        footer = "\nEND_DATA\n"
+
+        if fmt == "csv":
+            data_str = sub.to_csv(index=False)
+        else:
+            import json as _json
+            data_str = "\n".join(_json.dumps(r, ensure_ascii=False) for r in sub.to_dict(orient="records"))
+
+        out = header + data_str + footer
+        if len(out) > max_chars:
+            # Se exceder, limita por linhas mantendo cabeçalho e rodapé
+            if fmt == "csv":
+                # Conta linhas: primeira é header CSV
+                lines = data_str.splitlines()
+                head = lines[:1]
+                body = lines[1:]
+                trimmed = []
+                total = len(header) + len(footer) + sum(len(l) + 1 for l in head)
+                for l in body:
+                    if total + len(l) + 1 > max_chars:
+                        break
+                    trimmed.append(l)
+                    total += len(l) + 1
+                data_str2 = "\n".join(head + trimmed)
+            else:
+                lines = data_str.splitlines()
+                trimmed = []
+                total = len(header) + len(footer)
+                for l in lines:
+                    if total + len(l) + 1 > max_chars:
+                        break
+                    trimmed.append(l)
+                    total += len(l) + 1
+                data_str2 = "\n".join(trimmed)
+            out = header + data_str2 + footer + "\n...TRUNCATED DUE TO SIZE LIMIT...\n"
+
+        return out
 
     # ---------------- Internals ----------------
     def _load_google_sheet(self, spreadsheet_id: str, file_name: str) -> None:

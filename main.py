@@ -362,8 +362,14 @@ def main() -> None:
             # 2) Query: receita total por mês/ano ("fatura", "receita total", etc.)
             if not handled and any(w in text_lower for w in ["fatura", "receita", "faturamento", "total"]):
                 ym = loader.parse_month_year(last_user_msg)
+                year = month_num = None
                 if ym:
                     year, month_num = ym
+                    if month_num and not year:
+                        y_latest = loader.latest_year_for_month(month_num)
+                        if y_latest:
+                            year = y_latest
+                if year and month_num:
                     res_rev = loader.revenue_total(year, month_num)
                 else:
                     res_rev = loader.revenue_total_latest()
@@ -396,12 +402,31 @@ def main() -> None:
         if loader:
             try:
                 max_chars = int(st.session_state.get("raw_max_chars", 45000))
-                raw_ctx = loader.build_raw_context(
-                    layer=st.session_state.get("raw_layer", "samples"),
-                    rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 200)),
-                    fmt=st.session_state.get("raw_format", "jsonl"),
-                    max_chars=max_chars,
-                )
+                # Se a intenção for receita e conseguirmos identificar período, fornecemos dados filtrados completos
+                text_lower = last_user_msg.lower()
+                if any(w in text_lower for w in ["fatura", "receita", "faturamento", "total"]):
+                    ym = loader.parse_month_year(last_user_msg)
+                    y = m = None
+                    if ym:
+                        y, m = ym
+                        if m and not y:
+                            ly = loader.latest_year_for_month(m)
+                            if ly:
+                                y = ly
+                    # Se ainda não resolvido, usa último período
+                    if not (y and m):
+                        lm = loader.latest_period()
+                        if lm:
+                            y, m = lm
+                    raw_ctx = loader.build_raw_context_filtered(year=y, month_num=m, fmt="jsonl", max_chars=max_chars)
+                else:
+                    # Caso geral: amostras por aba
+                    raw_ctx = loader.build_raw_context(
+                        layer=st.session_state.get("raw_layer", "samples"),
+                        rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 200)),
+                        fmt=st.session_state.get("raw_format", "jsonl"),
+                        max_chars=max_chars,
+                    )
             except Exception as e:
                 raw_ctx = f"[falha ao gerar dados brutos: {e}]"
 
