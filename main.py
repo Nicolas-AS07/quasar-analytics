@@ -351,7 +351,19 @@ def main() -> None:
                             sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (dados agregados):\n" + json.dumps(agg_ctx, ensure_ascii=False)).strip()
                             handled = True
 
-            # 2) Query: receita por ID de transação
+            # 2) Query: receita total por mês/ano ("fatura", "receita total", etc.)
+            if not handled and any(w in text_lower for w in ["fatura", "receita", "faturamento", "total"]):
+                ym = loader.parse_month_year(last_user_msg)
+                if ym:
+                    year, month_num = ym
+                    res_rev = loader.revenue_total(year, month_num)
+                else:
+                    res_rev = loader.revenue_total_latest()
+                if res_rev.get("found"):
+                    sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (receita total do mês):\n" + json.dumps(res_rev, ensure_ascii=False)).strip()
+                    handled = True
+
+            # 3) Query: receita por ID de transação
             if not handled:
                 import re
                 m = re.search(r"\b([A-Za-z]-\d{6}-\d+)\b|\b(T-\d{6}-\d+)\b", last_user_msg)
@@ -366,7 +378,7 @@ def main() -> None:
                         sheets_ctx = (sheets_ctx + "\n\n" + "Contexto (receita por transação):\n" + json.dumps(res_tx, ensure_ascii=False)).strip()
                         handled = True
 
-            # 3) Fallback: busca por produtos
+            # 4) Fallback: busca por produtos
             if not handled:
                 rows = loader.search_advanced(last_user_msg, top_k=5)
                 sheets_ctx = loader.build_context_snippet(rows)

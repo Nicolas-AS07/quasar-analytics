@@ -156,7 +156,22 @@ class SheetsLoader:
         sizes = [(k, int(df.shape[0])) for k, df in self._norm_cache.items()]
         sizes.sort(key=lambda x: x[1], reverse=True)
         months = self._available_months()
-        return {"found": True, "top": sizes[:top_n], "months": months}
+        # Totais por mês (receita)
+        df_all = self._concat_norm()
+        totals_by_month = []
+        if not df_all.empty and "revenue" in df_all.columns:
+            grp = (
+                df_all.groupby(["year", "month_num"], as_index=False)["revenue"]
+                .sum()
+                .sort_values(["year", "month_num"])
+            )
+            for _, r in grp.iterrows():
+                totals_by_month.append({
+                    "year": str(r["year"]),
+                    "month": self._pt_month_name(str(r["month_num"])) if r["month_num"] else "",
+                    "revenue": float(r["revenue"] or 0),
+                })
+        return {"found": True, "top": sizes[:top_n], "months": months, "totals_by_month": totals_by_month[-12:]}
 
     def search_advanced(self, query: str, top_k: int = 5) -> list:
         """Busca simples por produto contendo o termo."""
@@ -261,6 +276,25 @@ class SheetsLoader:
                 "by_revenue": grp_r.to_dict(orient="records"),
             })
         return out
+
+    def revenue_total(self, year: str, month_num: str) -> Dict[str, Any]:
+        """Receita total para um mês/ano específico."""
+        df_all = self._concat_norm()
+        if df_all.empty:
+            return {"found": False}
+        sub = df_all[(df_all["year"] == str(year)) & (df_all["month_num"] == str(month_num))]
+        if sub.empty or "revenue" not in sub.columns:
+            return {"found": False}
+        total = float(sub["revenue"].sum())
+        return {"found": True, "year": str(year), "month": self._pt_month_name(str(month_num)), "revenue": total, "rows": int(sub.shape[0])}
+
+    def revenue_total_latest(self) -> Dict[str, Any]:
+        """Receita total do período mais recente detectado."""
+        lm = self.latest_period()
+        if not lm:
+            return {"found": False}
+        year, month_num = lm
+        return self.revenue_total(year, month_num)
 
     # ---------------- Internals ----------------
     def _load_google_sheet(self, spreadsheet_id: str, file_name: str) -> None:
