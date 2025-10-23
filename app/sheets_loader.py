@@ -153,11 +153,11 @@ class SheetsLoader:
             drive_service, sheets_service = get_google_apis_services()
             # Se chegou aqui, as credenciais estão OK
             has_folder = bool(self.sheet_folder_id)
-            
-            if has_folder:
+            has_ids = bool(self._extra_sheet_ids)
+            if has_folder or has_ids:
                 return True
             else:
-                self._last_errors.append("SHEETS_FOLDER_ID não configurado")
+                self._last_errors.append("SHEETS_FOLDER_ID não configurado e nenhum SHEETS_IDS informado")
                 return False
         except Exception as e:
             self._last_errors.append(f"Config error: {e}")
@@ -170,14 +170,17 @@ class SheetsLoader:
         
         try:
             drive_service, sheets_service = get_google_apis_services()
-            
-            # 1) Metadados da pasta — detecta Shared Drive
-            folder_meta = drive_service.files().get(
-                fileId=self.sheet_folder_id,
-                fields="id, name, mimeType, driveId, parents",
-                supportsAllDrives=True,
-            ).execute()
-            self._debug["folder_meta"] = folder_meta
+
+            files: List[Dict[str, Any]] = []
+            folder_meta = None
+            if self.sheet_folder_id:
+                # 1) Metadados da pasta — detecta Shared Drive
+                folder_meta = drive_service.files().get(
+                    fileId=self.sheet_folder_id,
+                    fields="id, name, mimeType, driveId, parents",
+                    supportsAllDrives=True,
+                ).execute()
+                self._debug["folder_meta"] = folder_meta
 
             # 2) Monta consulta robusta (diretos na pasta)
             query = (
@@ -196,13 +199,14 @@ class SheetsLoader:
                 pageSize=1000,
             )
 
-            drive_id = folder_meta.get("driveId")
-            if drive_id:
-                # Pasta dentro de um Shared Drive
-                params.update(corpora="drive", driveId=drive_id)
-            else:
-                # Meu Drive do usuário
-                params.update(corpora="user")
+            if folder_meta:
+                drive_id = folder_meta.get("driveId")
+                if drive_id:
+                    # Pasta dentro de um Shared Drive
+                    params.update(corpora="drive", driveId=drive_id)
+                else:
+                    # Meu Drive do usuário
+                    params.update(corpora="user")
 
             def list_once(extra_params: dict) -> List[Dict[str, Any]]:
                 tmp_files = []
@@ -219,12 +223,13 @@ class SheetsLoader:
                         break
                 return tmp_files
 
-            files: List[Dict[str, Any]] = []
-            # Lista arquivos diretamente na pasta raiz
-            files.extend(list_once({}))
+            # 3) Obtenção da lista de arquivos
+            if folder_meta:
+                # Lista arquivos diretamente na pasta raiz
+                files.extend(list_once({}))
 
             # Recursivo: lista subpastas e seus arquivos, mantendo o mesmo corpora/driveId
-            if self._recursive:
+            if folder_meta and self._recursive:
                 # lista subpastas
                 q_folders = f"'{self.sheet_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
                 folder_params = dict(params)
@@ -260,10 +265,13 @@ class SheetsLoader:
             if self._extra_sheet_ids:
                 for sid in self._extra_sheet_ids:
                     try:
-                        meta = drive_service.files().get(fileId=sid, fields="id, name, mimeType", supportsAllDrives=True).execute()
-                        if not any(f.get("id") == sid for f in files):
-                            files.append(meta)
-                        included_by_id.append(meta)
+                        meta = self._resolve_spreadsheet_meta(drive_service, sid)
+                        if meta:
+                            if not any(f.get("id") == meta.get("id") for f in files):
+                                files.append(meta)
+                            included_by_id.append(meta)
+                        else:
+                            self._last_errors.append(f"ID {sid} não é uma planilha Google válida ou não acessível")
                     except Exception as e:
                         self._last_errors.append(f"Extra sheet id {sid}: {e}")
 
@@ -789,6 +797,80 @@ class SheetsLoader:
             norm_map[key] = self._normalize_dataframe(df, file_name, source_key=key)
 
         return raw_map, norm_map
+
+    def _resolve_spreadsheet_meta(self, drive_service, file_id: str) -> Optional[Dict[str, Any]]:
+        """Resolve um ID para metadados de uma planilha Google (segue shortcuts)."""
+        try:
+            meta = drive_service.files().get(
+                fileId=file_id,
+                fields="id, name, mimeType, modifiedTime, shortcutDetails",
+                supportsAllDrives=True,
+            ).execute()
+            mime = meta.get("mimeType")
+            if mime == "application/vnd.google-apps.spreadsheet":
+                return meta
+            if mime == "application/vnd.google-apps.shortcut":
+                details = meta.get("shortcutDetails", {}) or {}
+                target_id = details.get("targetId")
+                if target_id:
+                    meta2 = drive_service.files().get(
+                        fileId=target_id,
+                        fields="id, name, mimeType, modifiedTime",
+                        supportsAllDrives=True,
+                    ).execute()
+                    if meta2.get("mimeType") == "application/vnd.google-apps.spreadsheet":
+                        return meta2
+            return None
+        except Exception:
+            return None
+
+    def load_by_ids(self, ids: List[str]) -> Tuple[int, int]:
+        """Carrega (e mescla) dados apenas das planilhas especificadas por ID."""
+        if not ids:
+            return self._last_counts.get("sheets", 0), self._last_counts.get("rows", 0)
+        try:
+            drive_service, sheets_service = get_google_apis_services()
+            files: List[Dict[str, Any]] = []
+            for sid in ids:
+                meta = self._resolve_spreadsheet_meta(drive_service, sid)
+                if meta:
+                    files.append(meta)
+                else:
+                    self._last_errors.append(f"ID {sid} não resolvido como planilha Google")
+
+            if not files:
+                return self._last_counts.get("sheets", 0), self._last_counts.get("rows", 0)
+
+            # Carrega e mescla
+            new_cache: Dict[str, pd.DataFrame] = dict(self._cache)
+            new_norm_cache: Dict[str, pd.DataFrame] = dict(self._norm_cache)
+            files_meta = {f.get("id"): f for f in files}
+            for f in files:
+                fid = f.get("id")
+                name = f.get("name") or ""
+                if f.get("mimeType") != "application/vnd.google-apps.spreadsheet":
+                    continue
+                try:
+                    raw_map, norm_map = self._load_google_sheet(fid, name)
+                    new_cache.update(raw_map)
+                    new_norm_cache.update(norm_map)
+                    if getattr(self, "_store", None) and self._store and self._store.available():
+                        for k, df_n in norm_map.items():
+                            ws_title = k.split("::")[1] if "::" in k else ""
+                            meta = files_meta.get(fid, {})
+                            self._store.save_norm(k, df_n, file_id=fid, worksheet=ws_title, file_modified_time=meta.get("modifiedTime"))
+                except Exception as e:
+                    self._last_errors.append(f"Load by id {name}: {e}")
+
+            self._cache = new_cache
+            self._norm_cache = new_norm_cache
+            loaded_map = {k: int(v.shape[0]) for k, v in self._cache.items()}
+            total_rows = sum(loaded_map.values())
+            self._last_counts = {"sheets": len(loaded_map), "rows": total_rows}
+            return self._last_counts["sheets"], self._last_counts["rows"]
+        except Exception as e:
+            self._last_errors.append(f"Load by ids error: {e}")
+            raise
 
     @staticmethod
     def _num_to_col_letters(n: int) -> str:

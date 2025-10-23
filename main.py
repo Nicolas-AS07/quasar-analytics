@@ -308,6 +308,23 @@ def main() -> None:
         sheets_ctx = ""
         loader = st.session_state.get("sheets")
         if loader:
+            # Detecta se o usuário forneceu links/IDs de planilha e carrega on-demand
+            try:
+                import re as _re
+                # URLs do Google Sheets e IDs puros (>= 20 chars alfanum/ - _)
+                ids = []
+                for m in _re.finditer(r"https?://docs\.google\.com/spreadsheets/d/([A-Za-z0-9-_]+)", last_user_msg):
+                    ids.append(m.group(1))
+                for m in _re.finditer(r"\b([A-Za-z0-9-_]{20,})\b", last_user_msg):
+                    ids.append(m.group(1))
+                ids = list(dict.fromkeys(ids))  # unique, keep order
+                if ids:
+                    try:
+                        loader.load_by_ids(ids)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             try:
                 base = loader.base_summary(top_n=3)
                 if base.get("found"):
