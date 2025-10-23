@@ -18,7 +18,13 @@ from collections import defaultdict
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
 
-from app.config import get_google_apis_services, get_sheets_folder_id, get_sheet_range
+from app.config import (
+    get_google_apis_services,
+    get_sheets_folder_id,
+    get_sheet_range,
+    get_sheets_ids,
+    get_recursive_listing,
+)
 
 
 class DataStore:
@@ -136,6 +142,9 @@ class SheetsLoader:
         except Exception as e:
             self._store = None
             self._last_errors.append(f"Datastore init error: {e}")
+        # IDs extras explicitados via config
+        self._extra_sheet_ids: List[str] = get_sheets_ids() or []
+        self._recursive: bool = get_recursive_listing(True)
 
     def is_configured(self) -> bool:
         """Verifica se está configurado."""
@@ -170,7 +179,7 @@ class SheetsLoader:
             ).execute()
             self._debug["folder_meta"] = folder_meta
 
-            # 2) Monta consulta robusta
+            # 2) Monta consulta robusta (diretos na pasta)
             query = (
                 f"'{self.sheet_folder_id}' in parents and ("
                 "mimeType='application/vnd.google-apps.spreadsheet' or "
@@ -195,18 +204,71 @@ class SheetsLoader:
                 # Meu Drive do usuário
                 params.update(corpora="user")
 
-            # 3) Paginação
-            files: List[Dict[str, Any]] = []
-            page_token = None
-            while True:
-                if page_token:
-                    params["pageToken"] = page_token
-                results = drive_service.files().list(**params).execute()
-                files.extend(results.get("files", []))
-                page_token = results.get("nextPageToken")
-                if not page_token:
-                    break
+            def list_once(extra_params: dict) -> List[Dict[str, Any]]:
+                tmp_files = []
+                page_token = None
+                p = dict(params)
+                p.update(extra_params or {})
+                while True:
+                    if page_token:
+                        p["pageToken"] = page_token
+                    results = drive_service.files().list(**p).execute()
+                    tmp_files.extend(results.get("files", []))
+                    page_token = results.get("nextPageToken")
+                    if not page_token:
+                        break
+                return tmp_files
 
+            files: List[Dict[str, Any]] = []
+            # Lista arquivos diretamente na pasta raiz
+            files.extend(list_once({}))
+
+            # Recursivo: lista subpastas e seus arquivos, mantendo o mesmo corpora/driveId
+            if self._recursive:
+                # lista subpastas
+                q_folders = f"'{self.sheet_folder_id}' in parents and mimeType='application/vnd.google-apps.folder'"
+                folder_params = dict(params)
+                folder_params.update(q=q_folders, fields="nextPageToken, files(id, name, mimeType)")
+                subfolders = list_once(folder_params)
+
+                stack = [sf.get("id") for sf in subfolders]
+                visited = set()
+                while stack:
+                    fid = stack.pop()
+                    if not fid or fid in visited:
+                        continue
+                    visited.add(fid)
+                    # arquivos dessa subpasta
+                    q_child = (
+                        f"'{fid}' in parents and ("
+                        "mimeType='application/vnd.google-apps.spreadsheet' or "
+                        "mimeType='text/csv' or "
+                        "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')"
+                    )
+                    child_params = dict(params)
+                    child_params.update(q=q_child)
+                    files.extend(list_once(child_params))
+                    # subpastas recursivas
+                    q_sub = f"'{fid}' in parents and mimeType='application/vnd.google-apps.folder'"
+                    sub_params = dict(params)
+                    sub_params.update(q=q_sub, fields="nextPageToken, files(id, name, mimeType)")
+                    for sf in list_once(sub_params):
+                        stack.append(sf.get("id"))
+
+            # Inclui planilhas explícitas por ID, mesmo fora da pasta
+            included_by_id = []
+            if self._extra_sheet_ids:
+                for sid in self._extra_sheet_ids:
+                    try:
+                        meta = drive_service.files().get(fileId=sid, fields="id, name, mimeType", supportsAllDrives=True).execute()
+                        if not any(f.get("id") == sid for f in files):
+                            files.append(meta)
+                        included_by_id.append(meta)
+                    except Exception as e:
+                        self._last_errors.append(f"Extra sheet id {sid}: {e}")
+
+            self._debug["resolved_sheet_ids"] = self._extra_sheet_ids
+            self._debug["included_by_id"] = [{"id": f.get("id"), "name": f.get("name")} for f in included_by_id]
             self._debug["files_found"] = [{"id": f.get("id"), "name": f.get("name"), "mimeType": f.get("mimeType")} for f in files]
             total_rows = 0
 

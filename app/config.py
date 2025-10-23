@@ -161,8 +161,36 @@ def get_google_apis_services():
 
 # Funções auxiliares para compatibilidade
 def get_sheets_ids() -> list:
-    """Retorna lista vazia - não usado na versão simplificada."""
-    return []
+    """Lê SHEETS_IDS de secrets/env.
+
+    Aceita:
+    - CSV de IDs: "id1,id2,id3"
+    - JSON array: ["id1", "id2"]
+    """
+    raw = _get("SHEETS_IDS", required=False, default="")
+    if not raw:
+        return []
+    raw = str(raw).strip()
+    if not raw:
+        return []
+    # Tenta JSON primeiro
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [str(x).strip() for x in data if str(x).strip()]
+    except Exception:
+        pass
+    # CSV
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def get_recursive_listing(default: bool = True) -> bool:
+    """Flag para listagem recursiva em subpastas (SHEETS_RECURSIVE=true/false)."""
+    raw = _get("SHEETS_RECURSIVE", required=False)
+    if raw is None:
+        return default
+    v = str(raw).strip().lower()
+    return v in ("1", "true", "yes", "on")
 
 
 def get_sheet_range(default: str = "A:Z") -> str:
