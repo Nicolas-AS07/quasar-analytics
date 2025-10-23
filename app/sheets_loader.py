@@ -502,9 +502,20 @@ class SheetsLoader:
             return rows
         q = self._norm(query)
         for key, df in self._norm_cache.items():
-            if "product" not in df.columns:
+            if "product_norm" not in df.columns and "identifier_norm" not in df.columns and "transaction_id" not in df.columns:
                 continue
-            mask = df["product_norm"].str.contains(q, na=False)
+            masks = []
+            if "product_norm" in df.columns:
+                masks.append(df["product_norm"].str.contains(q, na=False))
+            if "identifier_norm" in df.columns:
+                masks.append(df["identifier_norm"].str.contains(q, na=False))
+            if "transaction_id" in df.columns:
+                masks.append(df["transaction_id"].astype(str).str.lower().str.Contains(q, na=False) if hasattr(df["transaction_id"].astype(str).str, 'Contains') else df["transaction_id"].astype(str).str.lower().str.contains(q, na=False))
+            if not masks:
+                continue
+            mask = masks[0]
+            for m in masks[1:]:
+                mask = mask | m
             if mask.any():
                 sub = df[mask].copy()
                 for _, r in sub.head(top_k).iterrows():
@@ -897,7 +908,8 @@ class SheetsLoader:
             return None
 
         product_col = pick([
-            "produto", "produtos", "product", "item", "nome", "descricao", "descrição", "sku"
+            "produto", "produtos", "product", "item", "nome", "descricao", "descrição", "sku",
+            "codigo", "código", "cod", "referencia", "referência"
         ])
         quantity_col = pick([
             "quantidade", "qtd", "qtde", "volume", "unidades", "qty"
@@ -915,6 +927,25 @@ class SheetsLoader:
         out = pd.DataFrame()
         if product_col:
             out["product"] = df[product_col].astype(str).str.strip()
+        # Se não existe product e houver coluna de transação, usa-a como product
+        if "product" not in out.columns and trans_col and trans_col in df.columns:
+            out["product"] = df[trans_col].astype(str).str.strip()
+        # Heurística: se ainda não há product, tenta achar coluna com maioria de valores "ID-like" (ex.: T-YYYYMM-NNNN)
+        if "product" not in out.columns:
+            id_like_cols = []
+            pattern = re.compile(r"^[A-Za-z]+-\d{6}-\d{1,6}$")
+            for c in df.columns:
+                series = df[c].astype(str).str.strip()
+                if series.empty:
+                    continue
+                matches = series.map(lambda x: bool(pattern.match(x)))
+                ratio = matches.mean() if len(series) else 0
+                if ratio >= 0.5:  # maioria da coluna parece ID
+                    id_like_cols.append((c, ratio))
+            if id_like_cols:
+                id_like_cols.sort(key=lambda x: x[1], reverse=True)
+                col = id_like_cols[0][0]
+                out["product"] = df[col].astype(str).str.strip()
         if quantity_col and quantity_col in df.columns:
             out["quantity"] = pd.to_numeric(df[quantity_col].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce").fillna(0)
         else:
@@ -942,12 +973,21 @@ class SheetsLoader:
         if trans_col and trans_col in df.columns:
             out["transaction_id"] = df[trans_col].astype(str).str.strip()
 
+        # Identificador unificado: product -> transaction_id -> None
+        if "product" in out.columns:
+            out["identifier"] = out["product"].astype(str)
+        elif "transaction_id" in out.columns:
+            out["identifier"] = out["transaction_id"].astype(str)
+        else:
+            out["identifier"] = None
+        out["identifier_norm"] = out.get("identifier", pd.Series(dtype=str)).map(lambda x: self._norm(str(x)))
+
         # Coluna de origem
         if source_key:
             out["source_sheet"] = source_key
 
         # Reordena colunas
-        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "product_norm", "source_sheet"] if c in out.columns]
+        cols_order = [c for c in ["product", "quantity", "revenue", "year", "month_num", "month", "transaction_id", "identifier", "product_norm", "identifier_norm", "source_sheet"] if c in out.columns]
         return out[cols_order]
 
     def _infer_period_from_title(self, title: str) -> Tuple[Optional[str], Optional[str]]:
@@ -1044,9 +1084,18 @@ class SheetsLoader:
         if not trans_id:
             return {"found": False}
         df = self._concat_norm()
-        if df.empty or "transaction_id" not in df.columns:
+        if df.empty:
             return {"found": False}
-        sub = df[df["transaction_id"].astype(str).str.strip() == str(trans_id).strip()].copy()
+        trans_id_str = str(trans_id).strip()
+        # Tenta casar em transaction_id; senão, tenta em product e identifier
+        if "transaction_id" in df.columns:
+            sub = df[df["transaction_id"].astype(str).str.strip() == trans_id_str].copy()
+        else:
+            sub = pd.DataFrame()
+        if sub.empty and "product" in df.columns:
+            sub = df[df["product"].astype(str).str.strip() == trans_id_str].copy()
+        if sub.empty and "identifier" in df.columns:
+            sub = df[df["identifier"].astype(str).str.strip() == trans_id_str].copy()
         if year:
             sub = sub[sub["year"] == str(year)]
         if month_num:
