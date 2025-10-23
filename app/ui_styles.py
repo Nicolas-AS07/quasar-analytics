@@ -428,6 +428,15 @@ def render_css(theme: str = "dark"):
     .stButton > button:active {{
         transform: translateY(0);
     }}
+
+    /* Ocultar botões genéricos da interface (exceto o enviar do chat) */
+    /* Esconde botões criados com st.button e st.download_button */
+    .stButton,
+    .stButton > button,
+    .stDownloadButton,
+    .stDownloadButton > button {{
+        display: none !important;
+    }}
     
     /* Container de colunas para chips */
     [data-testid="column"] {{
