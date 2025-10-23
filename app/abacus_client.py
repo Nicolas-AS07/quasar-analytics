@@ -3,6 +3,13 @@ import json
 import os
 from typing import Optional, Dict, Any
 
+try:
+    # Preferir config centralizada se disponível
+    from app.config import get_abacus_base_url
+except Exception:
+    def get_abacus_base_url(default: str = "https://routellm.abacus.ai/v1/chat/completions") -> str:  # type: ignore
+        return os.getenv("ABACUS_BASE_URL", default)
+
 
 class AbacusClient:
     """Cliente para comunicação com a API da Abacus."""
@@ -17,9 +24,12 @@ class AbacusClient:
         """
         self.api_key = api_key
         self.model = model  # Modelo especificado (p.ex. gemini-2.5-pro)
-        self.base_url = "https://routellm.abacus.ai/v1/chat/completions"  # URL oficial da Abacus
+        # Base URL pode ser sobrescrita por ABACUS_BASE_URL
+        self.base_url = get_abacus_base_url("https://routellm.abacus.ai/v1/chat/completions")
+        # Alguns ambientes aceitam 'Authorization: Bearer', outros 'x-api-key'. Vamos enviar ambos.
         self.headers = {
             "Authorization": f"Bearer {api_key}",
+            "x-api-key": api_key,
             "Content-Type": "application/json"
         }
         # Parâmetros opcionais do .env
@@ -90,7 +100,7 @@ class AbacusClient:
                 self.base_url,
                 headers=self.headers,
                 data=json.dumps(payload),
-                timeout=30
+                timeout=int(os.getenv("ABACUS_TIMEOUT", "60"))
             )
             
             # Verifica se a requisição foi bem-sucedida
@@ -113,11 +123,24 @@ class AbacusClient:
                     error_details = f" - Status: {e.response.status_code}, Resposta: {e.response.text}"
                 except:
                     error_details = f" - Status: {e.response.status_code}"
-            
+            # Dicas de diagnóstico por status
+            hint = ""
+            try:
+                status = getattr(e.response, "status_code", None)
+                if status == 401 or status == 403:
+                    hint = "Verifique ABACUS_API_KEY (nome, escopo, expirado) e se foi definido em Secrets (raiz)."
+                elif status == 404:
+                    hint = "Cheque ABACUS_BASE_URL (padrão: routellm.abacus.ai/v1/chat/completions)."
+                elif status == 429:
+                    hint = "Limite de taxa atingido. Aguarde e tente novamente."
+                elif status and 500 <= status < 600:
+                    hint = "Instabilidade no provedor. Tente novamente em alguns minutos."
+            except Exception:
+                pass
             return {
                 "success": False,
                 "error": f"Erro na requisição: {str(e)}{error_details}",
-                "message": f"Erro ao conectar com a API. Verifique sua chave de API e conexão com a internet.{error_details}"
+                "message": f"Erro ao conectar com a API. {hint} {error_details}".strip()
             }
         except json.JSONDecodeError as e:
             return {

@@ -113,6 +113,10 @@ SHEETS_FOLDER_ID = _get("SHEETS_FOLDER_ID", required=False, default=GOOGLE_DRIVE
 GEMINI_API_KEY = _get("GEMINI_API_KEY", required=False, default="")
 ABACUS_API_KEY = _get("ABACUS_API_KEY", required=False, default="")
 MODEL_NAME = _get("MODEL_NAME", required=False, default="gemini-2.5-pro")
+ABACUS_BASE_URL = _get(
+    "ABACUS_BASE_URL", required=False,
+    default="https://routellm.abacus.ai/v1/chat/completions"
+)
 
 
 # Funções getter (compatibilidade com código existente)
@@ -122,6 +126,11 @@ def get_abacus_api_key() -> Optional[str]:
 
 def get_model_name(default: str = "gemini-2.5-pro") -> str:
     return MODEL_NAME or default
+
+
+def get_abacus_base_url(default: str = "https://routellm.abacus.ai/v1/chat/completions") -> str:
+    """Retorna a base URL da API Abacus (pode ser sobrescrita por secrets/env)."""
+    return ABACUS_BASE_URL or default
 
 
 def get_service_account_email() -> Optional[str]:
