@@ -169,18 +169,7 @@ def main() -> None:
 
         st.divider()
 
-        # Recarregar manualmente
-        if loader and st.button("Recarregar planilhas agora"):
-            try:
-                n_sheets, n_rows = loader.load_all()
-                st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
-                st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state.sheets_last_loaded_ts = time.time()
-                st.success("Planilhas recarregadas.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Falha ao recarregar: {e}")
-
+        # Removido: botão de recarregar manualmente (sem botões na UI)
         st.divider()
 
         # Prévia das abas
@@ -202,36 +191,7 @@ def main() -> None:
 
         # Removido: controles de UI para dados brutos (agora automático)
 
-        # Snapshot JSON
-        if loader:
-            try:
-                status = loader.status()
-                loaded_map = status.get("loaded", {}) or {}
-                snapshot = {
-                    "sheets_ids": status.get("resolved_sheet_ids", getattr(loader, "sheet_ids", [])),
-                    "worksheets": [
-                        {
-                            "sheet_id": key.split("::")[0] if "::" in key else key,
-                            "worksheet": key.split("::")[1] if "::" in key else "",
-                            "rows": int(cnt),
-                            "columns": list(loader._cache.get(key).columns) if key in loader._cache else [],
-                        }
-                        for key, cnt in loaded_map.items()
-                    ],
-                    "totals": {
-                        "worksheets": len(loaded_map),
-                        "rows": sum(int(v) for v in loaded_map.values()) if loaded_map else 0,
-                    },
-                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                st.download_button(
-                    "⬇️ Baixar contexto (JSON)",
-                    data=json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8"),
-                    file_name="quasar_context_snapshot.json",
-                    mime="application/json",
-                )
-            except Exception:
-                pass
+        # Removido: botão de download de snapshot JSON (sem botões na UI)
 
     # ---------------- Landing / Chat ----------------
     if not st.session_state.messages:
