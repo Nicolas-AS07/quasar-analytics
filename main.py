@@ -265,27 +265,7 @@ def main() -> None:
         display_chat_messages()
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Chips acima da caixa de texto (sempre visíveis)
-    st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("🔍 Análise Completa", use_container_width=True, key="chip_b1"):
-            st.session_state.messages.append(
-                {"role": "user", "content": "Mostre uma análise de vendas do último mês", "timestamp": datetime.now().strftime("%H:%M")}
-            )
-            st.rerun()
-    with c2:
-        if st.button("📊 Top Produtos", use_container_width=True, key="chip_b2"):
-            st.session_state.messages.append(
-                {"role": "user", "content": "Quais foram os produtos mais vendidos?", "timestamp": datetime.now().strftime("%H:%M")}
-            )
-            st.rerun()
-    with c3:
-        if st.button("💰 Performance", use_container_width=True, key="chip_b3"):
-            st.session_state.messages.append(
-                {"role": "user", "content": "Como está a performance de vendas este ano?", "timestamp": datetime.now().strftime("%H:%M")}
-            )
-            st.rerun()
+    # (Removido) Perguntas presetadas acima da caixa de chat
 
     # Campo de chat
     user_input = st.chat_input("O que você quer saber?")
