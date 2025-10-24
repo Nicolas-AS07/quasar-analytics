@@ -438,10 +438,7 @@ def render_css(theme: str = "dark"):
         display: none !important;
     }}
 
-    /* Esconde qualquer <button> na aplicação, menos o botão de enviar do chat */
-    [data-testid="stAppViewContainer"] button:not([data-testid="stChatInputSubmitButton"]) {{
-        display: none !important;
-    }}
+    /* Removido: regra global para esconder <button>, pois ocultava o toggle da sidebar */
 
     /* Esconde Link Buttons (st.link_button) */
     [data-testid="stAppViewContainer"] [data-testid="stLinkButton"],
