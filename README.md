@@ -34,7 +34,7 @@ Isso permite que a IA leia o conteúdo original das planilhas e formate a saída
 ### 1. Pré-requisitos
 
 - Python 3.8 ou superior
-- Chave da API Abacus: `s2_7ec8cf43a89443bf91d9954336134bf0`
+
 
 ### 2. Instalação
 
