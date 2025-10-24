@@ -22,7 +22,8 @@ from app.config import (
 )
 
 # --- Loader (Google APIs nativas; sem gspread)
-from app.sheets_loader import SheetsLoader
+# Importação do loader será feita de forma lazy dentro da inicialização,
+# para capturar e exibir erros de import no UI (evita crash no import).
 
 # --- Cliente do modelo
 from app.abacus_client import AbacusClient
@@ -105,7 +106,16 @@ def initialize_session() -> None:
     st.session_state.setdefault("raw_max_chars", 200000)
 
     # Carrega planilhas de forma simplificada
-    loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
+    loader = st.session_state.get("sheets")
+    if loader is None:
+        try:
+            from app.sheets_loader import SheetsLoader  # import lazy com tratamento de erro
+            loader = SheetsLoader()
+        except Exception as e:
+            st.error(f"Erro ao importar/carregar SheetsLoader: {e}")
+            st.session_state.sheets = None
+            st.session_state.sheets_status = {"sheets": 0, "rows": 0}
+            return
 
     if loader.is_configured():
         try:
@@ -133,7 +143,7 @@ def main() -> None:
     with st.sidebar:
         st.markdown("### 📚 Dados carregados")
 
-        loader: SheetsLoader | None = st.session_state.get("sheets")
+        loader = st.session_state.get("sheets")
         rows_total = 0
         worksheets_count = 0
         sheets_count = 0
