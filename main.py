@@ -294,8 +294,20 @@ def main() -> None:
                 pass
             try:
                 base = loader.base_summary(top_n=3)
+                extra = {}
+                # Inclui lista de planilhas acessíveis (nomes) para evitar confusão do LLM
+                try:
+                    st_status = loader.status()
+                    files_found = st_status.get("debug", {}).get("files_found", [])
+                    if files_found:
+                        extra["planilhas_acessiveis"] = [f.get("name") for f in files_found if f.get("name")][:50]
+                except Exception:
+                    pass
                 if base.get("found"):
-                    sheets_ctx = "Contexto (base):\n" + json.dumps(base, ensure_ascii=False)
+                    merged = dict(base)
+                    if extra:
+                        merged.update(extra)
+                    sheets_ctx = "Contexto (base):\n" + json.dumps(merged, ensure_ascii=False)
             except Exception:
                 pass
 
