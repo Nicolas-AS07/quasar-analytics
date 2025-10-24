@@ -205,3 +205,17 @@ def get_recursive_listing(default: bool = True) -> bool:
 def get_sheet_range(default: str = "A:Z") -> str:
     """Retorna range padrão."""
     return default
+
+
+def get_listing_scope(default: str = "folder") -> str:
+    """Retorna escopo de listagem de planilhas.
+
+    Valores suportados:
+    - "folder" (padrão): apenas dentro de SHEETS_FOLDER_ID (com recursão opcional)
+    - "all": lista em todo o Drive (My Drive + Shared Drives) usando corpora=allDrives
+    """
+    raw = _get("SHEETS_SCOPE", required=False, default=default) or default
+    val = str(raw).strip().lower()
+    if val in ("all", "alldrives", "all_drives", "drive"):
+        return "all"
+    return "folder"

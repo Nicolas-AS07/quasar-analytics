@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 
 import streamlit as st
+import pandas as pd
 from dotenv import load_dotenv
 
 from app.ui_styles import render_css

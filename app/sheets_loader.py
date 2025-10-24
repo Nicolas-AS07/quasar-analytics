@@ -24,6 +24,7 @@ from app.config import (
     get_sheet_range,
     get_sheets_ids,
     get_recursive_listing,
+    get_listing_scope,
 )
 
 
@@ -145,6 +146,7 @@ class SheetsLoader:
         # IDs extras explicitados via config
         self._extra_sheet_ids: List[str] = get_sheets_ids() or []
         self._recursive: bool = get_recursive_listing(True)
+    self._scope: str = get_listing_scope("folder")
 
     def is_configured(self) -> bool:
         """Verifica se está configurado."""
@@ -152,6 +154,8 @@ class SheetsLoader:
             # Testa se consegue obter os serviços Google
             drive_service, sheets_service = get_google_apis_services()
             # Se chegou aqui, as credenciais estão OK
+            if self._scope == "all":
+                return True
             has_folder = bool(self.sheet_folder_id)
             has_ids = bool(self._extra_sheet_ids)
             if has_folder or has_ids:
@@ -173,7 +177,21 @@ class SheetsLoader:
 
             files: List[Dict[str, Any]] = []
             folder_meta = None
-            if self.sheet_folder_id:
+            # Modo ALL: lista tudo no Drive acessível
+            if self._scope == "all":
+                query = (
+                    "mimeType='application/vnd.google-apps.spreadsheet'"
+                )
+                params = dict(
+                    q=query,
+                    fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True,
+                    spaces="drive",
+                    pageSize=1000,
+                    corpora="allDrives",
+                )
+            elif self.sheet_folder_id:
                 # 1) Metadados da pasta — detecta Shared Drive
                 folder_meta = drive_service.files().get(
                     fileId=self.sheet_folder_id,
@@ -181,32 +199,34 @@ class SheetsLoader:
                     supportsAllDrives=True,
                 ).execute()
                 self._debug["folder_meta"] = folder_meta
+                # 2) Monta consulta robusta (diretos na pasta)
+                query = (
+                    f"'{self.sheet_folder_id}' in parents and ("
+                    "mimeType='application/vnd.google-apps.spreadsheet' or "
+                    "mimeType='text/csv' or "
+                    "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')"
+                )
 
-            # 2) Monta consulta robusta (diretos na pasta)
-            query = (
-                f"'{self.sheet_folder_id}' in parents and ("
-                "mimeType='application/vnd.google-apps.spreadsheet' or "
-                "mimeType='text/csv' or "
-                "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')"
-            )
+                params = dict(
+                    q=query,
+                    fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True,
+                    spaces="drive",
+                    pageSize=1000,
+                )
 
-            params = dict(
-                q=query,
-                fields="nextPageToken, files(id, name, mimeType, modifiedTime)",
-                includeItemsFromAllDrives=True,
-                supportsAllDrives=True,
-                spaces="drive",
-                pageSize=1000,
-            )
-
-            if folder_meta:
-                drive_id = folder_meta.get("driveId")
-                if drive_id:
-                    # Pasta dentro de um Shared Drive
-                    params.update(corpora="drive", driveId=drive_id)
-                else:
-                    # Meu Drive do usuário
-                    params.update(corpora="user")
+                if folder_meta:
+                    drive_id = folder_meta.get("driveId")
+                    if drive_id:
+                        # Pasta dentro de um Shared Drive
+                        params.update(corpora="drive", driveId=drive_id)
+                    else:
+                        # Meu Drive do usuário
+                        params.update(corpora="user")
+            else:
+                # Sem folder e sem modo ALL: nada a fazer aqui (SHEETS_IDS pode complementar)
+                params = None
 
             def list_once(extra_params: dict) -> List[Dict[str, Any]]:
                 tmp_files = []
@@ -224,7 +244,9 @@ class SheetsLoader:
                 return tmp_files
 
             # 3) Obtenção da lista de arquivos
-            if folder_meta:
+            if self._scope == "all":
+                files.extend(list_once({}))
+            elif folder_meta:
                 # Lista arquivos diretamente na pasta raiz
                 files.extend(list_once({}))
 
