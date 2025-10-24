@@ -439,16 +439,16 @@ def render_css(theme: str = "dark"):
     }}
 
     /* Esconde qualquer <button> na aplicação, menos o botão de enviar do chat */
-    [data-testid="stAppViewContainer"] button:not([data-testid="stChatInputSubmitButton"]) {
+    [data-testid="stAppViewContainer"] button:not([data-testid="stChatInputSubmitButton"]) {{
         display: none !important;
-    }
+    }}
 
     /* Esconde Link Buttons (st.link_button) */
     [data-testid="stAppViewContainer"] [data-testid="stLinkButton"],
     [data-testid="stAppViewContainer"] [data-testid="stLinkButton"] *,
-    [data-testid="stAppViewContainer"] a[role="button"] {
+    [data-testid="stAppViewContainer"] a[role="button"] {{
         display: none !important;
-    }
+    }}
     
     /* Container de colunas para chips */
     [data-testid="column"] {{
