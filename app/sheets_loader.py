@@ -146,7 +146,7 @@ class SheetsLoader:
         # IDs extras explicitados via config
         self._extra_sheet_ids: List[str] = get_sheets_ids() or []
         self._recursive: bool = get_recursive_listing(True)
-    self._scope: str = get_listing_scope("folder")
+        self._scope: str = get_listing_scope("folder")
 
     def is_configured(self) -> bool:
         """Verifica se está configurado."""
@@ -533,7 +533,7 @@ class SheetsLoader:
             if "identifier_norm" in df.columns:
                 masks.append(df["identifier_norm"].str.contains(q, na=False))
             if "transaction_id" in df.columns:
-                masks.append(df["transaction_id"].astype(str).str.lower().str.Contains(q, na=False) if hasattr(df["transaction_id"].astype(str).str, 'Contains') else df["transaction_id"].astype(str).str.lower().str.contains(q, na=False))
+                masks.append(df["transaction_id"].astype(str).str.lower().str.contains(q, na=False))
             if not masks:
                 continue
             mask = masks[0]
