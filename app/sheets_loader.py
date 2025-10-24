@@ -356,6 +356,7 @@ class SheetsLoader:
         return {
             "configured": self.is_configured(),
             "sheets_folder_id": self.sheet_folder_id,
+            "recursive": self._recursive,
             "sheets_count": self._last_counts.get("sheets", 0),
             "worksheets_count": len(self._cache),
             "loaded": loaded,

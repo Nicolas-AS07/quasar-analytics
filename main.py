@@ -17,6 +17,7 @@ from app.ui_styles import render_css
 from app.config import (
     get_abacus_api_key,
     get_model_name,
+    get_service_account_email,
 )
 
 # --- Loader (Google APIs nativas; sem gspread)
@@ -153,6 +154,32 @@ def main() -> None:
         if last_loaded:
             st.caption(f"Última atualização: {last_loaded}")
         st.divider()
+
+        # Diagnóstico rápido (sem botões)
+        with st.expander("🔧 Diagnóstico", expanded=False):
+            try:
+                sa_email = get_service_account_email() or "(não disponível)"
+            except Exception:
+                sa_email = "(erro ao obter)"
+            st.caption(f"Service Account: {sa_email}")
+            st.caption(f"Pasta (SHEETS_FOLDER_ID): {st.session_state.get('sheets').sheet_folder_id if loader else ''}")
+            try:
+                status = loader.status() if loader else {}
+                dbg = status.get("debug", {}) if status else {}
+                rec_flag = status.get("recursive", False)
+                st.caption(f"Listagem recursiva: {'sim' if rec_flag else 'não'}")
+                files_found = dbg.get("files_found", [])
+                last_errors = dbg.get("last_errors", [])
+                if files_found:
+                    st.write(f"Arquivos encontrados: {len(files_found)}")
+                    st.dataframe(pd.DataFrame(files_found)[:20], use_container_width=True, hide_index=True)
+                if last_errors:
+                    st.warning("\n".join(map(str, last_errors)))
+                # Dica de permissão
+                if files_found and len(files_found) <= 1:
+                    st.info("Compartilhe a pasta do Drive e as planilhas com o e-mail da Service Account acima para ampliar o acesso.")
+            except Exception as e:
+                st.caption(f"(diagnóstico indisponível: {e})")
 
         # TTL controls — sem default value no widget (usa session_state)
         st.markdown("#### ⚙️ Recarga automática (TTL)")
