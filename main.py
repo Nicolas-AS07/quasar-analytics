@@ -97,11 +97,11 @@ def initialize_session() -> None:
     if "sheets_ttl_seconds" not in st.session_state:
         st.session_state["sheets_ttl_seconds"] = 60
 
-    # Preferências de contexto bruto (agora automáticas; sem UI)
-    st.session_state.setdefault("raw_layer", "samples")
-    st.session_state.setdefault("raw_rows_per_sheet", 200)
+    # Preferências de contexto bruto (forçado para FULL conforme solicitado)
+    st.session_state.setdefault("raw_layer", "full")
+    st.session_state.setdefault("raw_rows_per_sheet", 500)
     st.session_state.setdefault("raw_format", "jsonl")
-    st.session_state.setdefault("raw_max_chars", 45000)
+    st.session_state.setdefault("raw_max_chars", 200000)
 
     # Carrega planilhas de forma simplificada
     loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
@@ -393,36 +393,17 @@ def main() -> None:
                 rows = loader.search_advanced(last_user_msg, top_k=5)
                 sheets_ctx = loader.build_context_snippet(rows)
 
-        # Dados brutos como camada adicional (opcional)
+        # Dados brutos: SEMPRE enviar FULL (jsonl) como contexto bruto
         raw_ctx = ""
         if loader:
             try:
-                max_chars = int(st.session_state.get("raw_max_chars", 45000))
-                # Se a intenção for receita e conseguirmos identificar período, fornecemos dados filtrados completos
-                text_lower = last_user_msg.lower()
-                if any(w in text_lower for w in ["fatura", "receita", "faturamento", "total"]):
-                    ym = loader.parse_month_year(last_user_msg)
-                    y = m = None
-                    if ym:
-                        y, m = ym
-                        if m and not y:
-                            ly = loader.latest_year_for_month(m)
-                            if ly:
-                                y = ly
-                    # Se ainda não resolvido, usa último período
-                    if not (y and m):
-                        lm = loader.latest_period()
-                        if lm:
-                            y, m = lm
-                    raw_ctx = loader.build_raw_context_filtered(year=y, month_num=m, fmt="jsonl", max_chars=max_chars)
-                else:
-                    # Caso geral: amostras por aba
-                    raw_ctx = loader.build_raw_context(
-                        layer=st.session_state.get("raw_layer", "samples"),
-                        rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 200)),
-                        fmt=st.session_state.get("raw_format", "jsonl"),
-                        max_chars=max_chars,
-                    )
+                max_chars = int(st.session_state.get("raw_max_chars", 200000))
+                raw_ctx = loader.build_raw_context(
+                    layer="full",
+                    rows_per_sheet=int(st.session_state.get("raw_rows_per_sheet", 500)),
+                    fmt="jsonl",
+                    max_chars=max_chars,
+                )
             except Exception as e:
                 raw_ctx = f"[falha ao gerar dados brutos: {e}]"
 
