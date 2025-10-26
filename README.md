@@ -66,54 +66,6 @@ Isso permite que a IA leia o conteúdo original das planilhas e formate a saída
 3. **Conexão Automática:**
    - ✅ A API key será carregada automaticamente do .env
 
-## 🌐 Deploy no Streamlit Cloud
-
-### Configuração dos Secrets
-
-Para fazer deploy no Streamlit Cloud, configure os seguintes secrets na interface do Streamlit Cloud (Settings → Secrets):
-
-```toml
-# --- API KEY DO ABACUS ---
-ABACUS_API_KEY = "s2_7ec8cf43a89443bf91d9954336134bf0"
-
-# --- MODELO IA ---
-MODEL_NAME = "gemini-2.5-pro"
-
-# --- ID DA PASTA DO GOOGLE DRIVE ---
-SHEETS_FOLDER_ID = "1VyxfRqAeh4ecCow3Rm4rQi_BWRD_Ss9G"
-
-# --- INTERVALO DAS PLANILHAS ---
-SHEET_RANGE = "A:Z"
-
-# --- IDs DAS PLANILHAS (se necessário) ---
-SHEETS_IDS = ""
-
-# --- CREDENCIAIS DO GOOGLE SERVICE ACCOUNT (JSON completo) ---
-# IMPORTANTE: Use este método para Streamlit Cloud!
-# Substitua pelos valores do SEU arquivo service_account.json:
-GOOGLE_SERVICE_ACCOUNT_CREDENTIALS = """
-{
-  "type": "service_account",
-  "project_id": "SEU_PROJECT_ID",
-  "private_key_id": "SUA_PRIVATE_KEY_ID",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nSUA_CHAVE_PRIVADA_COMPLETA\n-----END PRIVATE KEY-----",
-  "client_email": "seu-service-account@seu-projeto.iam.gserviceaccount.com",
-  "client_id": "SEU_CLIENT_ID",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/seu-service-account@seu-projeto.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-}
-"""
-```
-
-### ⚠️ IMPORTANTE para Streamlit Cloud:
-
-1. **Use apenas `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`** (JSON completo), não use `[google_service_account]` no Cloud
-2. **Não use** `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH` no Cloud (caminhos de arquivo não funcionam)
-3. **Substitua pelos SEUS valores** do arquivo `service_account.json`
-4. **Mantenha a formatação JSON** intacta (chaves, vírgulas, quebras de linha)
 
 ### 📝 Onde obter suas credenciais:
 
@@ -137,7 +89,7 @@ Veja o arquivo `STREAMLIT_CLOUD_SETUP.md` para instruções detalhadas.
 ### 1. Pré-requisitos
 1. **Configure as variáveis de ambiente:**
  - Python 3.8 ou superior
- - Chave da API Abacus: `s2_7ec8cf43a89443bf91d9954336134bf0`
+
 - **Configure o arquivo .env (local):**
    - Copie `.env.example` para `.env` e preencha:
       - `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS_PATH` (caminho ABSOLUTO para o JSON da Service Account, fora do repositório)
@@ -147,8 +99,7 @@ Veja o arquivo `STREAMLIT_CLOUD_SETUP.md` para instruções detalhadas.
       - `ABACUS_API_KEY` e `MODEL_NAME`
    - Para deploy, use secrets/variáveis de ambiente do provedor (não commite segredos)
    ```
-   ABACUS_API_KEY=s2_7ec8cf43a89443bf91d9954336134bf0
-   MODEL_NAME=gemini-2.5-flash
+ 
    ```
 
 2. **Não inclua o arquivo .env no repositório público**
