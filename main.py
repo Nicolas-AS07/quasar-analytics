@@ -490,13 +490,12 @@ def main() -> None:
                         else:
                             print(f"❌ DEBUG - Ignorado: {sheet_key}")
                     else:
-                        # Sem filtro: pega amostra de cada planilha
-                        sample_df = df.head(50) if len(df) > 50 else df
-                        all_data.extend(sample_df.to_dict(orient='records'))
+                        # Sem filtro: TODAS as linhas de TODAS as planilhas
+                        print(f"📂 DEBUG - Adicionando planilha completa: {sheet_key} ({len(df)} linhas)")
+                        all_data.extend(df.to_dict(orient='records'))
             
-            # Limita a 50 linhas totais (reduzido para evitar timeout)
-            if len(all_data) > 50:
-                all_data = all_data[:50]
+            # SEM LIMITE - envia TODOS os dados do mês filtrado
+            # (o filtro por mês já garante que não vai explodir)
             
             if all_data:
                 sheets_ctx = json.dumps(all_data, ensure_ascii=False, indent=2)
