@@ -420,6 +420,11 @@ def main() -> None:
             # ===== FILTRO INTELIGENTE POR MÊS =====
             text_lower = last_user_msg.lower()
             
+            # DEBUG: Mostra o que tem carregado
+            print(f"📊 DEBUG - Planilhas disponíveis:")
+            for key in loader._cache.keys():
+                print(f"  - {key}")
+            
             # Detecta mês na pergunta
             meses = {
                 'janeiro': '01', 'jan': '01',
@@ -453,17 +458,37 @@ def main() -> None:
             else:
                 ano_filtro = "2024"  # Padrão
             
+            print(f"🔍 DEBUG - Filtro detectado: mês={mes_filtro}, ano={ano_filtro}")
+            
             # Coleta dados filtrados ou todos
             all_data = []
             
             for sheet_key, df in loader._cache.items():
                 if df is not None and not df.empty:
-                    # Se detectou mês, filtra pela chave da planilha (ex: _2024_01_)
+                    # Se detectou mês, filtra de forma FLEXÍVEL
                     if mes_filtro and ano_filtro:
-                        token_filtro = f"_{ano_filtro}_{mes_filtro}_"
-                        if token_filtro in sheet_key:
+                        # Tenta vários padrões de match:
+                        # 1. _2024_01_
+                        # 2. janeiro
+                        # 3. _01_
+                        # 4. _2024_janeiro_
+                        # 5. _2024-01_ (hífen)
+                        
+                        key_lower = sheet_key.lower()
+                        matches = (
+                            f"_{ano_filtro}_{mes_filtro}_" in key_lower or
+                            f"_{ano_filtro}-{mes_filtro}_" in key_lower or
+                            f"_{ano_filtro}_{mes_filtro}" in key_lower or
+                            f"{ano_filtro}_{mes_filtro}" in key_lower or
+                            any(nome in key_lower for nome, num in meses.items() if num == mes_filtro)
+                        )
+                        
+                        if matches:
+                            print(f"✅ DEBUG - Match encontrado: {sheet_key} ({len(df)} linhas)")
                             # Pega TODAS as linhas da planilha do mês específico
                             all_data.extend(df.to_dict(orient='records'))
+                        else:
+                            print(f"❌ DEBUG - Ignorado: {sheet_key}")
                     else:
                         # Sem filtro: pega amostra de cada planilha
                         sample_df = df.head(50) if len(df) > 50 else df
