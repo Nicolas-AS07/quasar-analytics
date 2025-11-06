@@ -512,18 +512,31 @@ def main() -> None:
         sheets_ctx = ""
         loader = st.session_state.get("sheets")
         if loader:
-            # Resumo determinístico
-            try:
-                base = loader.base_summary(top_n=3)
-                if base.get("found"):
-                    sheets_ctx = "Contexto (base):\n" + json.dumps(base, ensure_ascii=False)
-            except Exception:
-                pass
-
             text_lower = last_user_msg.lower()
+            
+            # ===== DETECÇÃO DE TOTAIS/RECEITA (PRIORIDADE ALTA) =====
+            # Detecta perguntas sobre totais, receita, faturamento, vendas gerais
+            if any(palavra in text_lower for palavra in ["receita total", "faturamento", "total de vendas", "soma", "quanto foi", "total em"]):
+                ym = loader.parse_month_year(last_user_msg)
+                if ym:
+                    year, month_num = ym
+                    month_names = {
+                        "01": "janeiro", "02": "fevereiro", "03": "março", "04": "abril",
+                        "05": "maio", "06": "junho", "07": "julho", "08": "agosto",
+                        "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro"
+                    }
+                    month_name = month_names.get(month_num, month_num)
+                    
+                    # USA A NOVA FUNÇÃO get_month_totals()
+                    totals = loader.get_month_totals(month_name, year)
+                    if totals.get("found"):
+                        sheets_ctx = (
+                            "Contexto (totais do mês):\n"
+                            + json.dumps(totals, ensure_ascii=False)
+                        )
 
-            # Pergunta sobre top produtos
-            if (
+            # Pergunta sobre top produtos (só se não respondeu acima)
+            if not sheets_ctx and (
                 ("top" in text_lower or "mais vendido" in text_lower or "mais vendidos" in text_lower or "top 3" in text_lower)
                 and ("produto" in text_lower)
             ):

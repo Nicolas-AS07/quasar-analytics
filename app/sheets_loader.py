@@ -481,6 +481,72 @@ class SheetsLoader:
         if not frames:
             return pd.DataFrame()
         return pd.concat(frames, ignore_index=True)
+    
+    def get_month_totals(self, month_name_or_num: str, year: str) -> Dict[str, Any]:
+        """
+        Calcula totais gerais para um mês específico (receita, quantidade, pedidos).
+        Retorna dados agregados completos, não apenas top produtos.
+        """
+        months = {
+            "01": "janeiro", "02": "fevereiro", "03": "março", "04": "abril", 
+            "05": "maio", "06": "junho", "07": "julho", "08": "agosto", 
+            "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro"
+        }
+        inv = {v: k for k, v in months.items()}
+        m = month_name_or_num.strip().lower()
+        
+        # Identifica número do mês
+        if m in inv:
+            month_num = inv[m]
+        elif re.fullmatch(r"\d{1,2}", m):
+            month_num = m.zfill(2)
+        else:
+            month_num = None
+            for name, num in inv.items():
+                if name in m:
+                    month_num = num
+                    break
+            if month_num is None:
+                return {"found": False, "reason": "Mês inválido"}
+        
+        df = self.get_month_dataframe(year, month_num)
+        if df.empty:
+            return {"found": False, "reason": "Sem dados para o mês/ano informado"}
+        
+        # Calcula totais
+        receita_total = 0.0
+        quantidade_total = 0.0
+        
+        if "Receita_Total" in df.columns:
+            receita_total = df["Receita_Total"].apply(self._parse_number_br).sum()
+        
+        if "Quantidade" in df.columns:
+            quantidade_total = pd.to_numeric(df["Quantidade"], errors="coerce").fillna(0).sum()
+        
+        num_pedidos = len(df)
+        
+        # Top 5 produtos por receita (resumo)
+        top_produtos = []
+        if "Produto" in df.columns and "Receita_Total" in df.columns:
+            tmp = pd.DataFrame({
+                "Produto": df["Produto"],
+                "Receita_Total": df["Receita_Total"].apply(self._parse_number_br)
+            })
+            top = tmp.groupby("Produto", as_index=False)["Receita_Total"].sum()\
+                     .sort_values(by="Receita_Total", ascending=False)\
+                     .head(5)
+            top_produtos = top.to_dict(orient="records")
+        
+        return {
+            "found": True,
+            "year": year,
+            "month": months.get(month_num, month_num),
+            "month_num": month_num,
+            "receita_total": round(receita_total, 2),
+            "quantidade_total": int(quantidade_total),
+            "num_pedidos": num_pedidos,
+            "top_5_produtos": top_produtos
+        }
 
     def top_products(self, month_name_or_num: str, year: str, top_n: int = 3) -> Dict[str, Any]:
         months = {
