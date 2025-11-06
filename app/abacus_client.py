@@ -3,6 +3,13 @@ import json
 import os
 from typing import Optional, Dict, Any
 
+# ===== NOVO: Import do sistema de prompts otimizado =====
+try:
+    from app.prompts import get_system_prompt
+    HAS_PROMPTS = True
+except ImportError:
+    HAS_PROMPTS = False
+
 
 class AbacusClient:
     """Cliente para comunicação com a API da Abacus."""
@@ -24,15 +31,15 @@ class AbacusClient:
         }
         # Parâmetros opcionais do .env
         try:
-            self.temperature = float(os.getenv("TEMPERATURE", "0.7"))
+            self.temperature = float(os.getenv("TEMPERATURE", "0.3"))  # ATUALIZADO: de 0.7 para 0.3
         except ValueError:
-            self.temperature = 0.7
+            self.temperature = 0.3
         try:
-            self.max_tokens = int(os.getenv("MAX_TOKENS", "1000"))
+            self.max_tokens = int(os.getenv("MAX_TOKENS", "4096"))  # ATUALIZADO: de 1000 para 4096
         except ValueError:
-            self.max_tokens = 1000
+            self.max_tokens = 4096
         # Caminho opcional para um prompt de sistema externo
-        self.system_prompt_path = os.getenv("SYSTEM_PROMPT_PATH", "system_prompt.md")
+        self.system_prompt_path = os.getenv("SYSTEM_PROMPT_PATH", "")
     
     def send_message(self, message: str, conversation_history: Optional[list] = None) -> Dict[str, Any]:
         """
@@ -49,21 +56,31 @@ class AbacusClient:
             # Constrói o histórico de mensagens
             messages = []
             
-            # Adiciona mensagem de sistema para definir o comportamento do assistente
-            # Carrega prompt externo, se existir; caso contrário, usa um fallback padrão
+            # ===== ATUALIZADO: Usa sistema de prompts otimizado V2 =====
             system_text = None
-            try:
-                if self.system_prompt_path and os.path.isfile(self.system_prompt_path):
+            
+            # 1. Tenta usar Prompt V2 otimizado (se disponível)
+            if HAS_PROMPTS:
+                use_v2 = os.getenv("USE_SYSTEM_PROMPT_V2", "True").lower() == "true"
+                system_text = get_system_prompt(use_v2=use_v2)
+            
+            # 2. Permite override via arquivo externo (se especificado)
+            if self.system_prompt_path and os.path.isfile(self.system_prompt_path):
+                try:
                     with open(self.system_prompt_path, "r", encoding="utf-8") as f:
                         system_text = f.read()
-            except Exception:
-                system_text = None
+                except Exception:
+                    pass  # Mantém o prompt padrão/V2
+            
+            # 3. Fallback para prompt básico (se V2 não disponível)
             if not system_text:
                 system_text = (
                     "Você responde em português e usa a seção 'Contexto' quando disponível.\n"
                     "Siga este protocolo ao responder: 1) entenda a tarefa; 2) localize sinais/dados relevantes no Contexto; 3) calcule/extraia números; 4) redija resposta clara e objetiva com tabela/lista quando fizer sentido.\n"
                     "Apenas apresente a resposta final para o usuário; não mostre raciocínio intermediário."
                 )
+            # ==========================================================
+            
             messages.append({"role": "system", "content": system_text})
             
             # Adiciona histórico da conversa se fornecido

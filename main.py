@@ -26,6 +26,19 @@ from app.sheets_loader import SheetsLoader
 # --- Cliente do modelo
 from abacus_client import AbacusClient
 
+# ===== NOVO: Imports para RAG =====
+from app.prompts import get_system_prompt
+from app.cache_manager import CacheManager
+
+# Import condicional do RAG Engine
+try:
+    from app.rag_engine import RAGEngine
+    HAS_RAG = True
+except ImportError:
+    HAS_RAG = False
+    print("⚠️ RAG Engine não disponível. Instale: pip install chromadb sentence-transformers")
+# ===================================
+
 
 # -------------------------------------------------------
 # Boot
@@ -121,6 +134,14 @@ def initialize_session() -> None:
                 st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
                 st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.session_state.sheets_last_loaded_ts = time.time()
+                
+                # ========== INICIALIZAÇÃO RAG (NOVO) ==========
+                # Inicializa RAG Engine após carregamento bem-sucedido
+                if HAS_RAG and os.getenv("ENABLE_RAG", "True").lower() == "true":
+                    try:
+                        _initialize_rag(loader)
+                    except Exception as e_rag:
+                        st.warning(f"⚠️ RAG não pôde ser inicializado (continuando com busca tradicional): {e_rag}")
             else:
                 # Se não recarrega, mantém o loader atual
                 st.session_state.sheets = loader
@@ -133,6 +154,64 @@ def initialize_session() -> None:
     else:
         st.session_state.sheets = None
         st.session_state.sheets_status = {"sheets": 0, "rows": 0}
+
+
+# -------------------------------------------------------
+# RAG Initialization (NOVO)
+# -------------------------------------------------------
+def _initialize_rag(loader: SheetsLoader) -> None:
+    """
+    Inicializa o motor RAG e indexa dados se necessário.
+    Resolve problema: ❌ Sem persistência + ❌ Busca por keywords
+    """
+    try:
+        # Configurações do .env
+        persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
+        embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+        enable_smart_cache = os.getenv("ENABLE_SMART_CACHE", "True").lower() == "true"
+        
+        # Inicializa RAG Engine (singleton em session_state)
+        if "rag_engine" not in st.session_state:
+            with st.spinner("🔄 Inicializando motor RAG (primeira vez)..."):
+                st.session_state.rag_engine = RAGEngine(
+                    persist_dir=persist_dir,
+                    embedding_model=embedding_model
+                )
+        
+        rag: RAGEngine = st.session_state.rag_engine
+        
+        # Cache Manager para smart reindexing
+        cache_mgr = CacheManager()
+        current_hash = cache_mgr.get_data_hash(loader._cache)
+        
+        # Verifica se precisa reindexar (baseado em hash)
+        if enable_smart_cache and not cache_mgr.needs_reindex(current_hash):
+            print("✅ Cache RAG válido, pulando reindexação")
+            return
+        
+        # Reindexação necessária
+        with st.spinner("🔄 Indexando dados com RAG (pode levar alguns segundos)..."):
+            # Limpa índice antigo
+            rag.clear()
+            
+            # Indexa novos dados
+            batch_size = int(os.getenv("INDEXING_BATCH_SIZE", "100"))
+            indexed = rag.index_dataframes(loader._cache, batch_size=batch_size)
+            
+            # Salva hash e metadados
+            cache_mgr.save_hash(current_hash)
+            cache_mgr.save_metadata({
+                "timestamp": time.time(),
+                "total_docs": indexed,
+                "sheets_count": len(loader._cache),
+                "embedding_model": embedding_model
+            })
+            
+            st.success(f"✅ {indexed} documentos indexados com RAG!")
+    
+    except Exception as e:
+        st.warning(f"⚠️ Erro ao inicializar RAG (fallback para busca tradicional): {e}")
+        st.session_state.rag_engine = None
 
 
 # -------------------------------------------------------
@@ -495,8 +574,22 @@ def main() -> None:
 
             # Busca genérica quando não há agregação
             if not sheets_ctx:
-                rows = loader.search_advanced(last_user_msg, top_k=5)
-                sheets_ctx = loader.build_context_snippet(rows)
+                # ========== BUSCA RAG (NOVO) ==========
+                # Tenta usar RAG Engine para busca semântica
+                rag_engine = st.session_state.get("rag_engine")
+                if HAS_RAG and rag_engine is not None:
+                    try:
+                        top_k = int(os.getenv("TOP_K", "15"))
+                        results = rag_engine.search(last_user_msg, top_k=top_k)
+                        sheets_ctx = rag_engine.build_context(results)
+                    except Exception as e_rag:
+                        st.warning(f"⚠️ Erro na busca RAG, usando busca tradicional: {e_rag}")
+                        rows = loader.search_advanced(last_user_msg, top_k=5)
+                        sheets_ctx = loader.build_context_snippet(rows)
+                else:
+                    # Fallback para busca tradicional
+                    rows = loader.search_advanced(last_user_msg, top_k=5)
+                    sheets_ctx = loader.build_context_snippet(rows)
 
         # Garante que sempre existe a seção Contexto
         final_prompt = (
