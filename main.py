@@ -63,21 +63,22 @@ render_css("dark")
 def get_env_config() -> tuple[str, str]:
     """Lê API key e modelo via config central (st.secrets ou .env)."""
     api_key = get_abacus_api_key() or ""
-    model = get_model_name(default="gemini-2.5-pro")
+    model = get_model_name(default="gemini-2.0-flash-exp")
     
     # Debug: verifica se API key foi carregada
     if api_key:
-        print(f"✅ API Key carregada (primeiros 10 chars): {api_key[:10]}...")
+        print(f"✅ Google Gemini API Key carregada (primeiros 10 chars): {api_key[:10]}...")
     else:
         print("⚠️ ERRO: API Key não encontrada! Verifique .env ou Streamlit Secrets")
-        print("   Procurando por: ABACUS_API_KEY, API_KEY ou [abacus].API_KEY")
+        print("   Procurando por: GEMINI_API_KEY, ABACUS_API_KEY, API_KEY ou [abacus].API_KEY")
+        print("   Obtenha sua chave em: https://aistudio.google.com/app/apikey")
     
-    print(f"📋 Modelo selecionado: {model}")
+    print(f"📋 Modelo Gemini selecionado: {model}")
     
     return api_key, model
 
 
-def create_client(api_key: str, model: str = "gemini-2.5-pro") -> AbacusClient | None:
+def create_client(api_key: str, model: str = "gemini-2.0-flash-exp") -> AbacusClient | None:
     """Cria o cliente do modelo com tratamento de erro."""
     if not api_key or api_key.strip() == "":
         print("⚠️ API Key vazia - cliente não será criado")

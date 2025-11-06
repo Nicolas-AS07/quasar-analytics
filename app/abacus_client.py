@@ -12,30 +12,30 @@ except ImportError:
 
 
 class AbacusClient:
-    """Cliente para comunicação com a API da Abacus."""
+    """Cliente para comunicação com a API do Google Gemini (Google AI Studio)."""
     
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.0-flash-exp"):
         """
-        Inicializa o cliente da API Abacus.
+        Inicializa o cliente da API do Google Gemini.
         
         Args:
-            api_key (str): Chave da API da Abacus
-            model (str): Modelo a ser usado (padrão: gemini-2.5-flash)
+            api_key (str): Chave da API do Google AI Studio
+            model (str): Modelo a ser usado (padrão: gemini-2.0-flash-exp)
         """
         self.api_key = api_key
-        self.model = model  # Modelo especificado (p.ex. gemini-2.5-pro)
-        self.base_url = "https://routellm.abacus.ai/v1/chat/completions"  # URL oficial da Abacus
+        self.model = model
+        # URL oficial da API Google Gemini
+        self.base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         self.headers = {
-            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         # Parâmetros opcionais do .env
         try:
-            self.temperature = float(os.getenv("TEMPERATURE", "0.3"))  # ATUALIZADO: de 0.7 para 0.3
+            self.temperature = float(os.getenv("TEMPERATURE", "0.3"))
         except ValueError:
             self.temperature = 0.3
         try:
-            self.max_tokens = int(os.getenv("MAX_TOKENS", "4096"))  # ATUALIZADO: de 1000 para 4096
+            self.max_tokens = int(os.getenv("MAX_TOKENS", "4096"))
         except ValueError:
             self.max_tokens = 4096
         # Caminho opcional para um prompt de sistema externo
@@ -43,7 +43,7 @@ class AbacusClient:
     
     def send_message(self, message: str, conversation_history: Optional[list] = None) -> Dict[str, Any]:
         """
-        Envia uma mensagem para a API e retorna a resposta.
+        Envia uma mensagem para a API Google Gemini e retorna a resposta.
         
         Args:
             message (str): Mensagem do usuário
@@ -53,10 +53,7 @@ class AbacusClient:
             Dict[str, Any]: Resposta da API ou erro
         """
         try:
-            # Constrói o histórico de mensagens
-            messages = []
-            
-            # ===== ATUALIZADO: Usa sistema de prompts otimizado V2 =====
+            # ===== Prompt do Sistema =====
             system_text = None
             
             # 1. Tenta usar Prompt V2 otimizado (se disponível)
@@ -70,41 +67,59 @@ class AbacusClient:
                     with open(self.system_prompt_path, "r", encoding="utf-8") as f:
                         system_text = f.read()
                 except Exception:
-                    pass  # Mantém o prompt padrão/V2
+                    pass
             
-            # 3. Fallback para prompt básico (se V2 não disponível)
+            # 3. Fallback para prompt básico
             if not system_text:
                 system_text = (
                     "Você responde em português e usa a seção 'Contexto' quando disponível.\n"
-                    "Siga este protocolo ao responder: 1) entenda a tarefa; 2) localize sinais/dados relevantes no Contexto; 3) calcule/extraia números; 4) redija resposta clara e objetiva com tabela/lista quando fizer sentido.\n"
-                    "Apenas apresente a resposta final para o usuário; não mostre raciocínio intermediário."
+                    "Siga este protocolo: 1) entenda a tarefa; 2) localize dados relevantes no Contexto; "
+                    "3) calcule/extraia números; 4) resposta clara e objetiva com tabela/lista quando necessário.\n"
+                    "Apenas apresente a resposta final; não mostre raciocínio intermediário."
                 )
-            # ==========================================================
             
-            messages.append({"role": "system", "content": system_text})
+            # ===== Monta o conteúdo completo =====
+            # Gemini API não tem "system role" separado, então incluímos no contexto
+            full_message = f"{system_text}\n\n{message}"
             
-            # Adiciona histórico da conversa se fornecido
+            # Constrói array de contents no formato Gemini
+            contents = []
+            
+            # Adiciona histórico se fornecido (formato Gemini: {role, parts})
             if conversation_history:
-                messages.extend(conversation_history)
+                for msg in conversation_history:
+                    role = msg.get("role", "user")
+                    # Gemini usa "user" e "model" (não "assistant")
+                    if role == "assistant":
+                        role = "model"
+                    contents.append({
+                        "role": role,
+                        "parts": [{"text": msg.get("content", "")}]
+                    })
             
-            # Adiciona a mensagem atual do usuário
-            messages.append({
+            # Adiciona mensagem atual do usuário
+            contents.append({
                 "role": "user",
-                "content": message
+                "parts": [{"text": full_message}]
             })
             
-            # Prepara o payload para a API
+            # Prepara o payload para a API Google Gemini
             payload = {
-                "model": self.model,
-                "messages": messages,
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-                "stream": False
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": self.temperature,
+                    "maxOutputTokens": self.max_tokens,
+                    "topP": 0.95,
+                    "topK": 40
+                }
             }
             
-            # Faz a requisição para a API (formato oficial da Abacus)
+            # Faz a requisição para a API Google Gemini
+            # API key vai como query parameter
+            url_with_key = f"{self.base_url}?key={self.api_key}"
+            
             response = requests.post(
-                self.base_url,
+                url_with_key,
                 headers=self.headers,
                 data=json.dumps(payload),
                 timeout=30
@@ -113,14 +128,23 @@ class AbacusClient:
             # Verifica se a requisição foi bem-sucedida
             response.raise_for_status()
             
-            # Retorna a resposta parseada
+            # Retorna a resposta parseada (formato Gemini)
             response_data = response.json()
+            
+            # Extrai o texto da resposta
+            # Formato: {candidates: [{content: {parts: [{text: "..."}]}}]}
+            try:
+                candidate = response_data.get("candidates", [{}])[0]
+                content_part = candidate.get("content", {}).get("parts", [{}])[0]
+                message_text = content_part.get("text", "")
+            except (IndexError, KeyError):
+                message_text = "Erro ao extrair resposta do modelo"
             
             return {
                 "success": True,
-                "message": response_data.get("choices", [{}])[0].get("message", {}).get("content", ""),
-                "usage": response_data.get("usage", {}),
-                "model": response_data.get("model", self.model)
+                "message": message_text,
+                "usage": response_data.get("usageMetadata", {}),
+                "model": self.model
             }
             
         except requests.exceptions.RequestException as e:

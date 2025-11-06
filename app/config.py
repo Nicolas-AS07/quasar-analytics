@@ -184,17 +184,22 @@ def get_sheet_range(default: str = "A:Z") -> str:
 
 
 def get_abacus_api_key() -> Optional[str]:
-    # aceita também [abacus].API_KEY ou ABACUS_API_KEY
-    val = get_str_setting("ABACUS_API_KEY")
+    """
+    Obtém a API key do Google AI Studio (Gemini).
+    Aceita: ABACUS_API_KEY, GEMINI_API_KEY, API_KEY, ou [abacus].API_KEY
+    """
+    # Tenta ABACUS_API_KEY (legacy) ou GEMINI_API_KEY
+    val = get_str_setting("GEMINI_API_KEY")
     if not val:
-        # nomes alternativos comuns
+        val = get_str_setting("ABACUS_API_KEY")
+    if not val:
         val = get_str_setting("API_KEY")
-        if not val:
-            val = get_str_setting("ABACUS", "API_KEY")  # [abacus].API_KEY se estiver como seção
+    if not val:
+        val = get_str_setting("ABACUS", "API_KEY")
     return val
 
 
-def get_model_name(default: str = "gemini-2.5-pro") -> str:
+def get_model_name(default: str = "gemini-2.0-flash-exp") -> str:
     val = get_str_setting("MODEL_NAME")
     if not val:
         val = default
