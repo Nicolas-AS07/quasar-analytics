@@ -64,21 +64,32 @@ def get_env_config() -> tuple[str, str]:
     """Lê API key e modelo via config central (st.secrets ou .env)."""
     api_key = get_abacus_api_key() or ""
     model = get_model_name(default="gemini-2.5-pro")
+    
+    # Debug: verifica se API key foi carregada
+    if api_key:
+        print(f"✅ API Key carregada (primeiros 10 chars): {api_key[:10]}...")
+    else:
+        print("⚠️ ERRO: API Key não encontrada! Verifique .env ou Streamlit Secrets")
+        print("   Procurando por: ABACUS_API_KEY, API_KEY ou [abacus].API_KEY")
+    
+    print(f"📋 Modelo selecionado: {model}")
+    
     return api_key, model
 
 
 def create_client(api_key: str, model: str = "gemini-2.5-pro") -> AbacusClient | None:
     """Cria o cliente do modelo com tratamento de erro."""
+    if not api_key or api_key.strip() == "":
+        print("⚠️ API Key vazia - cliente não será criado")
+        return None
+        
     try:
+        print(f"🔄 Criando cliente Abacus com modelo: {model}")
         client = AbacusClient(api_key=api_key, model=model)
-        # Validação opcional se a biblioteca oferecer esse método
-        try:
-            if hasattr(client, "validate_connection") and not client.validate_connection():
-                st.warning("Não foi possível validar a conexão com o modelo.")
-        except Exception:
-            pass
+        print("✅ Cliente Abacus criado com sucesso")
         return client
     except Exception as e:
+        print(f"❌ Erro ao criar cliente do modelo: {e}")
         st.error(f"Erro ao criar cliente do modelo: {e}")
         return None
 
@@ -580,11 +591,32 @@ def main() -> None:
         if st.session_state.client:
             try:
                 resp = st.session_state.client.send_message(final_prompt, conversation_history)
-                content = resp.get("message", "") if isinstance(resp, dict) else str(resp)
+                
+                # Verifica se a resposta indica sucesso
+                if isinstance(resp, dict):
+                    if resp.get("success"):
+                        content = resp.get("message", "")
+                    else:
+                        # Erro retornado pela API
+                        error_msg = resp.get("message", "Erro desconhecido")
+                        error_details = resp.get("error", "")
+                        content = f"⚠️ {error_msg}"
+                        
+                        # Log do erro (aparece nos logs do Streamlit)
+                        print(f"Erro API Abacus: {error_details}")
+                else:
+                    content = str(resp)
+                    
             except Exception as e:
-                content = f"Falha ao consultar o modelo: {e}"
+                content = f"⚠️ Falha ao consultar o modelo: {str(e)}"
+                print(f"Exception em send_message: {e}")
         else:
-            content = "Não foi possível conectar ao modelo neste momento."
+            # Cliente não inicializado (falta API key ou erro na inicialização)
+            api_key = st.session_state.get("api_key", "")
+            if not api_key:
+                content = "⚠️ API Key não configurada. Configure em Secrets ou arquivo .env"
+            else:
+                content = "⚠️ Erro ao inicializar cliente do modelo. Verifique sua API Key e conexão."
 
         # Adiciona resposta do assistente e rerun
         st.session_state.messages.append(
