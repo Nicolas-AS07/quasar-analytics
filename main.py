@@ -494,9 +494,9 @@ def main() -> None:
                         sample_df = df.head(50) if len(df) > 50 else df
                         all_data.extend(sample_df.to_dict(orient='records'))
             
-            # Limita a 300 linhas totais (aumentei de 200)
-            if len(all_data) > 300:
-                all_data = all_data[:300]
+            # Limita a 50 linhas totais (reduzido para evitar timeout)
+            if len(all_data) > 50:
+                all_data = all_data[:50]
             
             if all_data:
                 sheets_ctx = json.dumps(all_data, ensure_ascii=False, indent=2)
@@ -524,7 +524,9 @@ AVISO: Nenhum dado de planilha está disponível no momento."""
         # Faz chamada ao modelo
         if st.session_state.client:
             try:
+                print(f"🚀 DEBUG - Enviando prompt para API (tamanho: {len(final_prompt)} chars)")
                 resp = st.session_state.client.send_message(final_prompt, conversation_history)
+                print(f"✅ DEBUG - Resposta recebida da API")
                 
                 # Verifica se a resposta indica sucesso
                 if isinstance(resp, dict):

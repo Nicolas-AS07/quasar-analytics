@@ -122,7 +122,7 @@ class AbacusClient:
                 url_with_key,
                 headers=self.headers,
                 data=json.dumps(payload),
-                timeout=30
+                timeout=120  # Aumentado para 120s (dados grandes)
             )
             
             # Verifica se a requisição foi bem-sucedida
