@@ -11,7 +11,7 @@ from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
 
-from ui_styles import render_css
+from app.ui_styles import render_css
 
 # --- Config centralizada do projeto (Cloud-first)
 from app.config import (
@@ -24,7 +24,7 @@ from app.config import (
 from app.sheets_loader import SheetsLoader
 
 # --- Cliente do modelo
-from abacus_client import AbacusClient
+from app.abacus_client import AbacusClient
 
 # ===== NOVO: Imports para RAG =====
 from app.prompts import get_system_prompt
