@@ -417,21 +417,67 @@ def main() -> None:
         loader = st.session_state.get("sheets")
         
         if loader and hasattr(loader, '_cache') and loader._cache:
-            # ===== SIMPLIFICAÇÃO RADICAL: Envia TODOS os dados relevantes =====
-            # Busca por palavras-chave simples em TODAS as colunas
+            # ===== FILTRO INTELIGENTE POR MÊS =====
+            text_lower = last_user_msg.lower()
+            
+            # Detecta mês na pergunta
+            meses = {
+                'janeiro': '01', 'jan': '01',
+                'fevereiro': '02', 'fev': '02',
+                'março': '03', 'mar': '03',
+                'abril': '04', 'abr': '04',
+                'maio': '05', 'mai': '05',
+                'junho': '06', 'jun': '06',
+                'julho': '07', 'jul': '07',
+                'agosto': '08', 'ago': '08',
+                'setembro': '09', 'set': '09',
+                'outubro': '10', 'out': '10',
+                'novembro': '11', 'nov': '11',
+                'dezembro': '12', 'dez': '12'
+            }
+            
+            mes_filtro = None
+            ano_filtro = None
+            
+            # Busca mês
+            for nome_mes, num_mes in meses.items():
+                if nome_mes in text_lower:
+                    mes_filtro = num_mes
+                    break
+            
+            # Busca ano (2024, 2023, etc)
+            import re
+            ano_match = re.search(r'20\d{2}', last_user_msg)
+            if ano_match:
+                ano_filtro = ano_match.group()
+            else:
+                ano_filtro = "2024"  # Padrão
+            
+            # Coleta dados filtrados ou todos
             all_data = []
             
             for sheet_key, df in loader._cache.items():
                 if df is not None and not df.empty:
-                    # Converte DataFrame para lista de dicts (amostra máxima: 50 linhas por planilha)
-                    sample_df = df.head(50) if len(df) > 50 else df
-                    all_data.extend(sample_df.to_dict(orient='records'))
+                    # Se detectou mês, filtra pela chave da planilha (ex: _2024_01_)
+                    if mes_filtro and ano_filtro:
+                        token_filtro = f"_{ano_filtro}_{mes_filtro}_"
+                        if token_filtro in sheet_key:
+                            # Pega TODAS as linhas da planilha do mês específico
+                            all_data.extend(df.to_dict(orient='records'))
+                    else:
+                        # Sem filtro: pega amostra de cada planilha
+                        sample_df = df.head(50) if len(df) > 50 else df
+                        all_data.extend(sample_df.to_dict(orient='records'))
             
-            # Limita a 200 linhas totais para não estourar o contexto
-            if len(all_data) > 200:
-                all_data = all_data[:200]
+            # Limita a 300 linhas totais (aumentei de 200)
+            if len(all_data) > 300:
+                all_data = all_data[:300]
             
-            sheets_ctx = json.dumps(all_data, ensure_ascii=False, indent=2)
+            if all_data:
+                sheets_ctx = json.dumps(all_data, ensure_ascii=False, indent=2)
+            else:
+                sheets_ctx = json.dumps({"aviso": f"Nenhum dado encontrado para o período solicitado (mês {mes_filtro}, ano {ano_filtro})"}, ensure_ascii=False)
+
 
         # Monta prompt final
         if sheets_ctx:
