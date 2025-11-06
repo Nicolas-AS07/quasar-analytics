@@ -278,14 +278,36 @@ class RAGEngine:
     
     def clear(self):
         """Limpa o índice (útil para reindexação completa)."""
-        print("🗑️ Limpando índice ChromaDB...")
-        self.client.delete_collection("vendas")
-        self.collection = self.client.get_or_create_collection(
-            name="vendas",
-            metadata={"description": "Dados de vendas do Quasar Analytics"}
-        )
-        self.client.persist()
-        print("✅ Índice limpo")
+        try:
+            print("🗑️ Limpando índice ChromaDB...")
+            
+            # Proteção: verifica se collection existe
+            if not hasattr(self, 'collection') or self.collection is None:
+                print("⚠️ Collection não existe, criando nova...")
+                self.collection = self.client.get_or_create_collection(
+                    name="vendas",
+                    metadata={"description": "Dados de vendas do Quasar Analytics"}
+                )
+                return
+            
+            # Deleta e recria collection
+            self.client.delete_collection("vendas")
+            self.collection = self.client.get_or_create_collection(
+                name="vendas",
+                metadata={"description": "Dados de vendas do Quasar Analytics"}
+            )
+            self.client.persist()
+            print("✅ Índice limpo")
+        except Exception as e:
+            print(f"⚠️ Erro ao limpar índice: {e}")
+            # Tenta recriar collection mesmo com erro
+            try:
+                self.collection = self.client.get_or_create_collection(
+                    name="vendas",
+                    metadata={"description": "Dados de vendas do Quasar Analytics"}
+                )
+            except Exception:
+                pass
     
     def stats(self) -> Dict[str, Any]:
         """Retorna estatísticas do índice."""

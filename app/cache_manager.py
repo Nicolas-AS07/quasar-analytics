@@ -46,10 +46,21 @@ class CacheManager:
         Returns:
             str: Hash MD5 hexadecimal
         """
+        # ===== VALIDAÇÃO CRÍTICA =====
+        if cache is None or not isinstance(cache, dict):
+            return hashlib.md5(b"empty_cache").hexdigest()
+        
+        if not cache:  # Dict vazio
+            return hashlib.md5(b"empty_cache").hexdigest()
+        
         # Concatena informações estruturais de todos os DataFrames
         signature = []
         
         for key, df in sorted(cache.items()):
+            # Proteção contra None no DataFrame
+            if df is None or not isinstance(df, pd.DataFrame):
+                continue
+                
             # Inclui: chave, shape, colunas
             sig_parts = [
                 f"key:{key}",
@@ -69,6 +80,10 @@ class CacheManager:
                     pass
             
             signature.append("|".join(sig_parts))
+        
+        # Proteção contra signature vazia
+        if not signature:
+            return hashlib.md5(b"empty_cache").hexdigest()
         
         # Combina tudo e gera hash
         combined = "||".join(signature)

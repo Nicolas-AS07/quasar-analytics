@@ -165,6 +165,12 @@ def _initialize_rag(loader: SheetsLoader) -> None:
     Resolve problema: ❌ Sem persistência + ❌ Busca por keywords
     """
     try:
+        # ===== VALIDAÇÃO CRÍTICA =====
+        # Verifica se há dados para indexar
+        if not loader or not hasattr(loader, '_cache') or not loader._cache:
+            print("⚠️ Nenhum dado disponível para indexar no RAG")
+            return
+        
         # Configurações do .env
         persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
         embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
@@ -191,8 +197,9 @@ def _initialize_rag(loader: SheetsLoader) -> None:
         
         # Reindexação necessária
         with st.spinner("🔄 Indexando dados com RAG (pode levar alguns segundos)..."):
-            # Limpa índice antigo
-            rag.clear()
+            # Limpa índice antigo apenas se collection existe
+            if hasattr(rag, 'collection') and rag.collection is not None:
+                rag.clear()
             
             # Indexa novos dados
             batch_size = int(os.getenv("INDEXING_BATCH_SIZE", "100"))
@@ -207,10 +214,11 @@ def _initialize_rag(loader: SheetsLoader) -> None:
                 "embedding_model": embedding_model
             })
             
-            st.success(f"✅ {indexed} documentos indexados com RAG!")
+            print(f"✅ {indexed} documentos indexados com RAG!")
     
     except Exception as e:
-        st.warning(f"⚠️ Erro ao inicializar RAG (fallback para busca tradicional): {e}")
+        # Fallback silencioso para busca tradicional
+        print(f"⚠️ RAG não pôde ser inicializado: {e}")
         st.session_state.rag_engine = None
 
 
