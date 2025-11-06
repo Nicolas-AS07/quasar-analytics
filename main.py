@@ -109,6 +109,7 @@ def initialize_session() -> None:
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("client", None)
     st.session_state.setdefault("sheets", None)
+    st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
 
     # API key e modelo
     if "api_key" not in st.session_state or "model" not in st.session_state:
@@ -118,129 +119,32 @@ def initialize_session() -> None:
         if api_key:
             st.session_state.client = create_client(api_key, model)
 
-    # TTL de recarga
-    # Definições padrão de TTL, que serão usadas pelo widget se o valor não existir ainda
-    st.session_state.setdefault("sheets_ttl_enabled", False)
-    st.session_state.setdefault("sheets_ttl_seconds", 60)
-
-    last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
+    # ===== SIMPLIFICAÇÃO: Loader sempre reutiliza =====
+    if st.session_state.sheets is None:
+        st.session_state.sheets = SheetsLoader()
     
-    # ===== CORREÇÃO CRÍTICA: Não sobrescrever loader existente =====
-    # Se já existe um loader na sessão, REUTILIZA em vez de criar novo
-    if "sheets" in st.session_state and st.session_state.sheets is not None:
-        loader: SheetsLoader = st.session_state.sheets
-    else:
-        loader: SheetsLoader = SheetsLoader()
-        st.session_state.sheets = loader
-    # =================================================================
-
-    # Determina se deve recarregar com base no TTL
-    should_reload = True
-    if st.session_state["sheets_ttl_enabled"] and last_loaded_ts:
+    loader: SheetsLoader = st.session_state.sheets
+    
+    # Carrega planilhas apenas se configurado E ainda não carregou
+    if loader.is_configured() and not st.session_state.get("sheets_loaded", False):
         try:
-            age = time.time() - float(last_loaded_ts)
-            if age < int(st.session_state["sheets_ttl_seconds"]):
-                should_reload = False
-        except Exception:
-            should_reload = True
-
-    # Carrega planilhas se configurado e se precisa recarregar
-    if loader.is_configured():
-        try:
-            if should_reload:
-                n_sheets, n_rows = loader.load_all()
-                st.session_state.sheets = loader
-                st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
-                st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state.sheets_last_loaded_ts = time.time()
-                
-                # ========== INICIALIZAÇÃO RAG (NOVO) ==========
-                # Inicializa RAG Engine após carregamento bem-sucedido (silencioso se falhar)
-                if HAS_RAG and os.getenv("ENABLE_RAG", "True").lower() == "true":
-                    try:
-                        _initialize_rag(loader)
-                    except Exception:
-                        # Fallback silencioso para busca tradicional
-                        pass
-            else:
-                # Se não recarrega, mantém o loader atual (já está em st.session_state.sheets)
-                st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
+            n_sheets, n_rows = loader.load_all()
+            st.session_state.sheets_status = {"sheets": n_sheets, "rows": n_rows}
+            st.session_state.sheets_loaded = True
+            st.session_state.sheets_last_loaded = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"✅ Planilhas carregadas: {n_sheets} planilhas, {n_rows} linhas")
         except Exception as e:
-            # Em caso de falha no carregamento, mantém o loader anterior (não altera)
-            st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
-            st.warning(f"Falha ao carregar planilhas (mantendo cache anterior): {e}")
-    else:
-        # ===== CORREÇÃO: Não zera se já tem dados carregados =====
-        # Se loader não está configurado MAS já tem dados em cache, mantém
-        if not hasattr(loader, '_cache') or not loader._cache:
-            st.session_state.sheets_status = {"sheets": 0, "rows": 0}
-        # ==========================================================
+            st.warning(f"Erro ao carregar planilhas: {e}")
+            st.session_state.sheets_loaded = False
 
 
 # -------------------------------------------------------
 # RAG Initialization (NOVO)
 # -------------------------------------------------------
-def _initialize_rag(loader: SheetsLoader) -> None:
-    """
-    Inicializa o motor RAG e indexa dados se necessário.
-    Resolve problema: ❌ Sem persistência + ❌ Busca por keywords
-    """
-    try:
-        # ===== VALIDAÇÃO CRÍTICA =====
-        # Verifica se há dados para indexar
-        if not loader or not hasattr(loader, '_cache') or not loader._cache:
-            print("⚠️ Nenhum dado disponível para indexar no RAG")
-            return
-        
-        # Configurações do .env
-        persist_dir = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")
-        embedding_model = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-        enable_smart_cache = os.getenv("ENABLE_SMART_CACHE", "True").lower() == "true"
-        
-        # Inicializa RAG Engine (singleton em session_state)
-        if "rag_engine" not in st.session_state:
-            with st.spinner("🔄 Inicializando motor RAG (primeira vez)..."):
-                st.session_state.rag_engine = RAGEngine(
-                    persist_dir=persist_dir,
-                    embedding_model=embedding_model
-                )
-        
-        rag: RAGEngine = st.session_state.rag_engine
-        
-        # Cache Manager para smart reindexing
-        cache_mgr = CacheManager()
-        current_hash = cache_mgr.get_data_hash(loader._cache)
-        
-        # Verifica se precisa reindexar (baseado em hash)
-        if enable_smart_cache and not cache_mgr.needs_reindex(current_hash):
-            print("✅ Cache RAG válido, pulando reindexação")
-            return
-        
-        # Reindexação necessária
-        with st.spinner("🔄 Indexando dados com RAG (pode levar alguns segundos)..."):
-            # Limpa índice antigo apenas se collection existe
-            if hasattr(rag, 'collection') and rag.collection is not None:
-                rag.clear()
-            
-            # Indexa novos dados
-            batch_size = int(os.getenv("INDEXING_BATCH_SIZE", "100"))
-            indexed = rag.index_dataframes(loader._cache, batch_size=batch_size)
-            
-            # Salva hash e metadados
-            cache_mgr.save_hash(current_hash)
-            cache_mgr.save_metadata({
-                "timestamp": time.time(),
-                "total_docs": indexed,
-                "sheets_count": len(loader._cache),
-                "embedding_model": embedding_model
-            })
-            
-            print(f"✅ {indexed} documentos indexados com RAG!")
-    
-    except Exception as e:
-        # Fallback silencioso para busca tradicional
-        print(f"⚠️ RAG não pôde ser inicializado: {e}")
-        st.session_state.rag_engine = None
+# ===== RAG DESATIVADO TEMPORARIAMENTE (simplificação) =====
+# def _initialize_rag(loader: SheetsLoader) -> None:
+#     ... (código comentado para simplificar)
+# ==========================================================
 
 
 # -------------------------------------------------------
@@ -511,104 +415,40 @@ def main() -> None:
         # Monta contexto baseado nas planilhas
         sheets_ctx = ""
         loader = st.session_state.get("sheets")
-        if loader:
-            text_lower = last_user_msg.lower()
+        
+        if loader and hasattr(loader, '_cache') and loader._cache:
+            # ===== SIMPLIFICAÇÃO RADICAL: Envia TODOS os dados relevantes =====
+            # Busca por palavras-chave simples em TODAS as colunas
+            all_data = []
             
-            # ===== DETECÇÃO DE TOTAIS/RECEITA (PRIORIDADE ALTA) =====
-            # Detecta perguntas sobre totais, receita, faturamento, vendas gerais
-            if any(palavra in text_lower for palavra in ["receita total", "faturamento", "total de vendas", "soma", "quanto foi", "total em"]):
-                ym = loader.parse_month_year(last_user_msg)
-                if ym:
-                    year, month_num = ym
-                    month_names = {
-                        "01": "janeiro", "02": "fevereiro", "03": "março", "04": "abril",
-                        "05": "maio", "06": "junho", "07": "julho", "08": "agosto",
-                        "09": "setembro", "10": "outubro", "11": "novembro", "12": "dezembro"
-                    }
-                    month_name = month_names.get(month_num, month_num)
-                    
-                    # USA A NOVA FUNÇÃO get_month_totals()
-                    totals = loader.get_month_totals(month_name, year)
-                    if totals.get("found"):
-                        sheets_ctx = (
-                            "Contexto (totais do mês):\n"
-                            + json.dumps(totals, ensure_ascii=False)
-                        )
+            for sheet_key, df in loader._cache.items():
+                if df is not None and not df.empty:
+                    # Converte DataFrame para lista de dicts (amostra máxima: 50 linhas por planilha)
+                    sample_df = df.head(50) if len(df) > 50 else df
+                    all_data.extend(sample_df.to_dict(orient='records'))
+            
+            # Limita a 200 linhas totais para não estourar o contexto
+            if len(all_data) > 200:
+                all_data = all_data[:200]
+            
+            sheets_ctx = json.dumps(all_data, ensure_ascii=False, indent=2)
 
-            # Pergunta sobre top produtos (só se não respondeu acima)
-            if not sheets_ctx and (
-                ("top" in text_lower or "mais vendido" in text_lower or "mais vendidos" in text_lower or "top 3" in text_lower)
-                and ("produto" in text_lower)
-            ):
-                # Todos os meses / por mês
-                if any(token in text_lower for token in ["todos os meses", "cada mês", "cada mes", "por mês", "por mes"]):
-                    res_all = loader.top_products_by_month_all(top_n=3)
-                    if res_all.get("found"):
-                        sheets_ctx = (
-                            sheets_ctx
-                            + "\n\nContexto (dados agregados por mês):\n"
-                            + json.dumps(res_all, ensure_ascii=False)
-                        ).strip()
-                # Mês específico
-                if not sheets_ctx:
-                    ym = loader.parse_month_year(last_user_msg)
-                    if ym:
-                        year, month_num = ym
-                        month_names = {
-                            "01": "janeiro",
-                            "02": "fevereiro",
-                            "03": "março",
-                            "04": "abril",
-                            "05": "maio",
-                            "06": "junho",
-                            "07": "julho",
-                            "08": "agosto",
-                            "09": "setembro",
-                            "10": "outubro",
-                            "11": "novembro",
-                            "12": "dezembro",
-                        }
-                        month_name = month_names.get(month_num, month_num)
-                        res = loader.top_products(month_name, year, top_n=3)
-                        if res.get("found"):
-                            agg_ctx = {
-                                "ano": res.get("year"),
-                                "mes": res.get("month"),
-                                "top_por_quantidade": res.get("by_quantity", []),
-                                "top_por_receita": res.get("by_revenue", []),
-                            }
-                            sheets_ctx = (
-                                sheets_ctx
-                                + "\n\nContexto (dados agregados):\n"
-                                + json.dumps(agg_ctx, ensure_ascii=False)
-                            ).strip()
+        # Monta prompt final
+        if sheets_ctx:
+            final_prompt = f"""Dados disponíveis (amostra das planilhas):
+{sheets_ctx}
 
-            # Busca genérica quando não há agregação
-            if not sheets_ctx:
-                # ========== BUSCA RAG (NOVO) ==========
-                # Tenta usar RAG Engine para busca semântica
-                rag_engine = st.session_state.get("rag_engine")
-                if HAS_RAG and rag_engine is not None:
-                    try:
-                        top_k = int(os.getenv("TOP_K", "15"))
-                        results = rag_engine.search(last_user_msg, top_k=top_k)
-                        sheets_ctx = rag_engine.build_context(results)
-                    except Exception:
-                        # Fallback silencioso para busca tradicional
-                        rows = loader.search_advanced(last_user_msg, top_k=5)
-                        sheets_ctx = loader.build_context_snippet(rows)
-                else:
-                    # Fallback para busca tradicional
-                    rows = loader.search_advanced(last_user_msg, top_k=5)
-                    sheets_ctx = loader.build_context_snippet(rows)
+Pergunta do usuário: {last_user_msg}
 
-        # Garante que sempre existe a seção Contexto
-        final_prompt = (
-            "Contexto (planilhas/agregações):\n"
-            + (sheets_ctx if sheets_ctx else "[sem contexto disponível]")
-            + "\n\nPergunta do usuário: "
-            + last_user_msg
-        )
+INSTRUÇÕES:
+- Use os dados acima para responder
+- Se precisar calcular totais, some os valores
+- Responda em português de forma clara e objetiva
+- Se não encontrar os dados, diga claramente"""
+        else:
+            final_prompt = f"""Pergunta do usuário: {last_user_msg}
+
+AVISO: Nenhum dado de planilha está disponível no momento."""
 
         # Faz chamada ao modelo
         if st.session_state.client:
