@@ -30,13 +30,12 @@ from app.abacus_client import AbacusClient
 from app.prompts import get_system_prompt
 from app.cache_manager import CacheManager
 
-# Import condicional do RAG Engine
+# Import condicional do RAG Engine (silencioso se não disponível)
 try:
     from app.rag_engine import RAGEngine
     HAS_RAG = True
 except ImportError:
     HAS_RAG = False
-    print("⚠️ RAG Engine não disponível. Instale: pip install chromadb sentence-transformers")
 # ===================================
 
 
@@ -136,12 +135,13 @@ def initialize_session() -> None:
                 st.session_state.sheets_last_loaded_ts = time.time()
                 
                 # ========== INICIALIZAÇÃO RAG (NOVO) ==========
-                # Inicializa RAG Engine após carregamento bem-sucedido
+                # Inicializa RAG Engine após carregamento bem-sucedido (silencioso se falhar)
                 if HAS_RAG and os.getenv("ENABLE_RAG", "True").lower() == "true":
                     try:
                         _initialize_rag(loader)
-                    except Exception as e_rag:
-                        st.warning(f"⚠️ RAG não pôde ser inicializado (continuando com busca tradicional): {e_rag}")
+                    except Exception:
+                        # Fallback silencioso para busca tradicional
+                        pass
             else:
                 # Se não recarrega, mantém o loader atual
                 st.session_state.sheets = loader
@@ -437,38 +437,7 @@ def main() -> None:
         )
         st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
 
-        # Três botões para perguntas rápidas (landing chips)
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("🔍 Análise Completa", use_container_width=True, key="chip1"):
-                st.session_state.messages.append(
-                    {
-                        "role": "user",
-                        "content": "Mostre uma análise de vendas do último mês",
-                        "timestamp": datetime.now().strftime("%H:%M"),
-                    }
-                )
-                st.rerun()
-        with col2:
-            if st.button("📊 Top Produtos", use_container_width=True, key="chip2"):
-                st.session_state.messages.append(
-                    {
-                        "role": "user",
-                        "content": "Quais foram os produtos mais vendidos?",
-                        "timestamp": datetime.now().strftime("%H:%M"),
-                    }
-                )
-                st.rerun()
-        with col3:
-            if st.button("💰 Performance", use_container_width=True, key="chip3"):
-                st.session_state.messages.append(
-                    {
-                        "role": "user",
-                        "content": "Como está a performance de vendas este ano?",
-                        "timestamp": datetime.now().strftime("%H:%M"),
-                    }
-                )
-                st.rerun()
+        # Rodapé (sem perguntas prontas)
         st.markdown(
             """
             <div class="landing-footer">
@@ -582,8 +551,8 @@ def main() -> None:
                         top_k = int(os.getenv("TOP_K", "15"))
                         results = rag_engine.search(last_user_msg, top_k=top_k)
                         sheets_ctx = rag_engine.build_context(results)
-                    except Exception as e_rag:
-                        st.warning(f"⚠️ Erro na busca RAG, usando busca tradicional: {e_rag}")
+                    except Exception:
+                        # Fallback silencioso para busca tradicional
                         rows = loader.search_advanced(last_user_msg, top_k=5)
                         sheets_ctx = loader.build_context_snippet(rows)
                 else:
