@@ -124,7 +124,15 @@ def initialize_session() -> None:
     st.session_state.setdefault("sheets_ttl_seconds", 60)
 
     last_loaded_ts = st.session_state.get("sheets_last_loaded_ts")
-    loader: SheetsLoader = st.session_state.get("sheets") or SheetsLoader()
+    
+    # ===== CORREÇÃO CRÍTICA: Não sobrescrever loader existente =====
+    # Se já existe um loader na sessão, REUTILIZA em vez de criar novo
+    if "sheets" in st.session_state and st.session_state.sheets is not None:
+        loader: SheetsLoader = st.session_state.sheets
+    else:
+        loader: SheetsLoader = SheetsLoader()
+        st.session_state.sheets = loader
+    # =================================================================
 
     # Determina se deve recarregar com base no TTL
     should_reload = True
@@ -155,17 +163,18 @@ def initialize_session() -> None:
                         # Fallback silencioso para busca tradicional
                         pass
             else:
-                # Se não recarrega, mantém o loader atual
-                st.session_state.sheets = loader
+                # Se não recarrega, mantém o loader atual (já está em st.session_state.sheets)
                 st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
         except Exception as e:
-            # Em caso de falha no carregamento, mantém o loader anterior
-            st.session_state.sheets = st.session_state.get("sheets")
+            # Em caso de falha no carregamento, mantém o loader anterior (não altera)
             st.session_state.setdefault("sheets_status", {"sheets": 0, "rows": 0})
             st.warning(f"Falha ao carregar planilhas (mantendo cache anterior): {e}")
     else:
-        st.session_state.sheets = None
-        st.session_state.sheets_status = {"sheets": 0, "rows": 0}
+        # ===== CORREÇÃO: Não zera se já tem dados carregados =====
+        # Se loader não está configurado MAS já tem dados em cache, mantém
+        if not hasattr(loader, '_cache') or not loader._cache:
+            st.session_state.sheets_status = {"sheets": 0, "rows": 0}
+        # ==========================================================
 
 
 # -------------------------------------------------------
